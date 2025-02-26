@@ -7,7 +7,7 @@ from PIL import Image
 import pdf2image
 import google.generativeai as genai
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 
 # Load environment variables
@@ -46,23 +46,12 @@ def input_pdf_setup(uploaded_file):
     else:
         raise FileNotFoundError("No File Uploaded")
 
-def generate_pdf(resume_content):
-    """Generate a well-structured, professional PDF resume."""
+def create_pdf(content, filename="updated_resume.pdf"):
+    """Create a professionally formatted PDF."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
-    story = []
-
-    # Title
-    story.append(Paragraph("<b>Generated Professional Resume</b>", styles['Title']))
-    story.append(Spacer(1, 12))
-
-    # Body text with proper styling
-    for line in resume_content.split("\n"):
-        if line.strip():
-            story.append(Paragraph(line, styles['Normal']))
-            story.append(Spacer(1, 6))
-
+    story = [Paragraph(content, styles['Normal'])]
     doc.build(story)
     buffer.seek(0)
     return buffer
@@ -107,8 +96,8 @@ focusing on the skills, topics, and tools specified in the provided job descript
 """
 
 input_prompt5 = """
-You are an expert resume writer with ATS optimization skills. Update the existing resume based on the provided job description while retaining the candidate's existing information.
-Ensure the resume is professional, well-structured, aligned, and uses proper fonts and spacing. Focus on highlighting the candidate's relevant skills and experience for the job.
+You are an expert resume writer and ATS optimization specialist. Using the existing resume content, improve and format it professionally to align perfectly with the job description provided.
+Ensure the updated resume is clear, well-structured, and visually appealing with proper alignment, spacing, fonts, and optimized keywords to maximize ATS scores.
 """
 
 if submit1:
@@ -141,15 +130,11 @@ elif submit4:
 elif submit5:
     if uploaded_file:
         pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt5, pdf_content, input_text)
-        pdf_buffer = generate_pdf(response)
+        updated_resume = get_gemini_response(input_prompt5, pdf_content, input_text)
+        st.subheader("Updated Resume Preview:")
+        st.text(updated_resume)
 
-        st.subheader("Download Your Updated Professional Resume")
-        st.download_button(
-            label="Download Resume as PDF",
-            data=pdf_buffer,
-            file_name="Updated_Resume.pdf",
-            mime="application/pdf"
-        )
+        pdf_file = create_pdf(updated_resume)
+        st.download_button(label="Download Updated Resume", data=pdf_file, file_name="Updated_Resume.pdf", mime="application/pdf")
     else:
         st.warning("Please upload a resume.")
