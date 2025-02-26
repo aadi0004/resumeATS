@@ -85,7 +85,7 @@ focusing on the skills, topics, and tools specified in the provided job descript
 
 input_prompt5 = """
 You are an expert resume writer with deep knowledge of industry requirements for Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, and Data Analysis.
-Using the provided job description, generate a professional and tailored resume highlighting relevant skills, experience, and achievements.
+Using the provided job description and the uploaded resume's content, generate a professional and tailored resume highlighting relevant skills, experience, and achievements.
 Ensure the resume is well-structured and ATS-friendly.
 """
 
@@ -117,9 +117,10 @@ elif submit4:
         st.warning("Please upload a resume.")
 
 elif submit5:
-    if input_text:
-        response = get_gemini_response(input_text, [""], input_prompt5)
+    if uploaded_file and input_text:
+        pdf_content = input_pdf_setup(uploaded_file)
+        response = get_gemini_response(input_text, pdf_content, input_prompt5)
         st.subheader("Generated Resume:")
         st.write(response)
     else:
-        st.warning("Please provide a job description.")
+        st.warning("Please provide a job description and upload a resume.")
