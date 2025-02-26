@@ -6,6 +6,9 @@ import base64
 from PIL import Image
 import pdf2image
 import google.generativeai as genai
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 
 # Load environment variables
 load_dotenv()
@@ -86,8 +89,10 @@ focusing on the skills, topics, and tools specified in the provided job descript
 input_prompt5 = """
 You are an expert resume writer with deep knowledge of industry requirements for Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, and Data Analysis.
 Using the provided job description and the uploaded resume's content, generate a professional and tailored resume highlighting relevant skills, experience, and achievements.
-Ensure the resume is well-structured and ATS-friendly.
+Ensure the resume is well-structured, ATS-friendly, and optimized to score highly on ATS systems.
 """
+
+generated_resume = None
 
 if submit1:
     if uploaded_file:
@@ -119,8 +124,21 @@ elif submit4:
 elif submit5:
     if uploaded_file and input_text:
         pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_text, pdf_content, input_prompt5)
+        generated_resume = get_gemini_response(input_text, pdf_content, input_prompt5)
         st.subheader("Generated Resume:")
-        st.write(response)
+        st.write(generated_resume)
+
+        # Convert generated resume to PDF
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        flowables = [Paragraph(line, styles['Normal']) for line in generated_resume.split('\n')]
+        doc.build(flowables)
+
+        # Create a download button for the generated resume PDF
+        pdf_buffer.seek(0)
+        b64 = base64.b64encode(pdf_buffer.read()).decode()
+        href = f'<a href="data:application/pdf;base64,{b64}" download="tailored_resume.pdf">Download Tailored Resume (PDF)</a>'
+        st.markdown(href, unsafe_allow_html=True)
     else:
         st.warning("Please provide a job description and upload a resume.")
