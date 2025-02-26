@@ -57,6 +57,7 @@ if uploaded_file:
 submit1 = st.button("Tell Me About the Resume")
 submit3 = st.button("Percentage Match")
 submit4 = st.button("Personalized Learning Path")
+submit5 = st.button("Generate Tailored Resume")
 
 input_prompt1 = """
 You are an experienced HR with tech expertise in Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, or Data Analysis.
@@ -80,6 +81,12 @@ focusing on the skills, topics, and tools specified in the provided job descript
 - Recommended practical exercises or projects.
 - Periodic assessments or milestones.
 - Tips for real-world applications.
+"""
+
+input_prompt5 = """
+You are an expert resume writer with deep knowledge of industry requirements for Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, and Data Analysis.
+Using the provided job description, generate a professional and tailored resume highlighting relevant skills, experience, and achievements.
+Ensure the resume is well-structured and ATS-friendly.
 """
 
 if submit1:
@@ -108,3 +115,11 @@ elif submit4:
         st.write(response)
     else:
         st.warning("Please upload a resume.")
+
+elif submit5:
+    if input_text:
+        response = get_gemini_response(input_text, [""], input_prompt5)
+        st.subheader("Generated Resume:")
+        st.write(response)
+    else:
+        st.warning("Please provide a job description.")
