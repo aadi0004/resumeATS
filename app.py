@@ -7,9 +7,8 @@ from PIL import Image
 import pdf2image
 import google.generativeai as genai
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-
 
 # Load environment variables
 load_dotenv()
@@ -31,22 +30,42 @@ def get_gemini_response(input_text, pdf_content, prompt):
 def input_pdf_setup(uploaded_file):
     """Convert first page of uploaded PDF to an image and encode as base64."""
     if uploaded_file is not None:
-        uploaded_file.seek(0)  # Reset file pointer
-        images = pdf2image.convert_from_bytes(uploaded_file.read())  # Removed poppler_path
+        uploaded_file.seek(0)
+        images = pdf2image.convert_from_bytes(uploaded_file.read())
         first_page = images[0]
 
-        # Convert image to bytes
         img_byte_arr = io.BytesIO()
         first_page.save(img_byte_arr, format='JPEG')
         img_byte_arr = img_byte_arr.getvalue()
 
         pdf_parts = [{
             "mime_type": "image/jpeg",
-            "data": base64.b64encode(img_byte_arr).decode()  # Encode to base64
+            "data": base64.b64encode(img_byte_arr).decode()
         }]
         return pdf_parts
     else:
         raise FileNotFoundError("No File Uploaded")
+
+def generate_pdf(resume_content):
+    """Generate a well-structured, professional PDF resume."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    # Title
+    story.append(Paragraph("<b>Generated Professional Resume</b>", styles['Title']))
+    story.append(Spacer(1, 12))
+
+    # Body text with proper styling
+    for line in resume_content.split("\n"):
+        if line.strip():
+            story.append(Paragraph(line, styles['Normal']))
+            story.append(Spacer(1, 6))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 # Streamlit App
 st.set_page_config(page_title="A5 ATS Resume Expert")
@@ -61,7 +80,7 @@ if uploaded_file:
 submit1 = st.button("Tell Me About the Resume")
 submit3 = st.button("Percentage Match")
 submit4 = st.button("Personalized Learning Path")
-submit5 = st.button("Generate Tailored Resume")
+submit5 = st.button("Generate Updated Resume")
 
 input_prompt1 = """
 You are an experienced HR with tech expertise in Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, or Data Analysis.
@@ -78,7 +97,7 @@ Your task is to evaluate the resume against the job description. Provide:
 """
 
 input_prompt4 = """
-You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role], 
+You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role],
 focusing on the skills, topics, and tools specified in the provided job description. Ensure the study plan includes:
 - A list of topics and tools for each month.
 - Suggested resources (books, online courses, documentation).
@@ -88,12 +107,9 @@ focusing on the skills, topics, and tools specified in the provided job descript
 """
 
 input_prompt5 = """
-You are an expert resume writer with deep knowledge of industry requirements for Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, and Data Analysis.
-Using the provided job description and the uploaded resume's content, generate a professional and tailored resume highlighting relevant skills, experience, and achievements.
-Ensure the resume is well-structured, ATS-friendly, and optimized to score highly on ATS systems.
+You are an expert resume writer with ATS optimization skills. Update the existing resume based on the provided job description while retaining the candidate's existing information.
+Ensure the resume is professional, well-structured, aligned, and uses proper fonts and spacing. Focus on highlighting the candidate's relevant skills and experience for the job.
 """
-
-generated_resume = None
 
 if submit1:
     if uploaded_file:
@@ -123,23 +139,17 @@ elif submit4:
         st.warning("Please upload a resume.")
 
 elif submit5:
-    if uploaded_file and input_text:
+    if uploaded_file:
         pdf_content = input_pdf_setup(uploaded_file)
-        generated_resume = get_gemini_response(input_text, pdf_content, input_prompt5)
-        st.subheader("Generated Resume:")
-        st.write(generated_resume)
+        response = get_gemini_response(input_prompt5, pdf_content, input_text)
+        pdf_buffer = generate_pdf(response)
 
-        # Convert generated resume to PDF
-        pdf_buffer = io.BytesIO()
-        doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
-        styles = getSampleStyleSheet()
-        flowables = [Paragraph(line, styles['Normal']) for line in generated_resume.split('\n')]
-        doc.build(flowables)
-
-        # Create a download button for the generated resume PDF
-        pdf_buffer.seek(0)
-        b64 = base64.b64encode(pdf_buffer.read()).decode()
-        href = f'<a href="data:application/pdf;base64,{b64}" download="tailored_resume.pdf">Download Tailored Resume (PDF)</a>'
-        st.markdown(href, unsafe_allow_html=True)
+        st.subheader("Download Your Updated Professional Resume")
+        st.download_button(
+            label="Download Resume as PDF",
+            data=pdf_buffer,
+            file_name="Updated_Resume.pdf",
+            mime="application/pdf"
+        )
     else:
-        st.warning("Please provide a job description and upload a resume.")
+        st.warning("Please upload a resume.")
