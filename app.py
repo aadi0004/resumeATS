@@ -133,9 +133,8 @@ Your task is to evaluate the resume against the job description. Provide:
 3. Final evaluation.
 """
 
-
 input_prompt4 = """
-You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role],
+You are an experienced learning coach and technical expert. Create a month-by-month 6-month personalized study plan for an individual aiming to excel in [Job Role],
 focusing on the skills, topics, and tools specified in the provided job description. Ensure the study plan includes:
 - A list of topics and tools for each month.
 - Suggested resources (books, online courses, documentation).
@@ -147,6 +146,7 @@ focusing on the skills, topics, and tools specified in the provided job descript
 input_prompt5 = """
 You are an experienced resume writer specializing in tech roles. Enhance the provided resume based on the job description to maximize its ATS score.
 Ensure proper formatting, use of relevant keywords, and a clean, professional layout with distinct sections and proper spacing.
+Also, correct the education section by aligning it neatly and ensuring proper formatting of dates and percentages.
 """
 
 if submit1:
@@ -175,7 +175,6 @@ elif submit4:
         st.write(response)
     else:
         st.warning("Please upload a resume.")
-
 
 elif submit5:
     if uploaded_file:
