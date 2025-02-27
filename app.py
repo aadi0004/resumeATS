@@ -133,6 +133,7 @@ Your task is to evaluate the resume against the job description. Provide:
 3. Final evaluation.
 """
 
+
 input_prompt4 = """
 You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role],
 focusing on the skills, topics, and tools specified in the provided job description. Ensure the study plan includes:
