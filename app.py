@@ -24,14 +24,20 @@ genai.configure(api_key=API_KEY)
 def get_gemini_response(input_text, pdf_content, prompt):
     """Generate a response using Google Gemini API."""
     model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content([input_text, pdf_content[0], prompt])
+    content = [input_text, prompt]
+    if pdf_content:
+        content.insert(1, pdf_content[0])
+    response = model.generate_content(content)
     return response.text
+
 
 def input_pdf_setup(uploaded_file):
     """Convert first page of uploaded PDF to an image and encode as base64."""
     if uploaded_file is not None:
         uploaded_file.seek(0)
         images = pdf2image.convert_from_bytes(uploaded_file.read())
+        if not images:
+            raise ValueError("No pages found in the uploaded PDF")
         first_page = images[0]
 
         img_byte_arr = io.BytesIO()
@@ -47,8 +53,8 @@ def input_pdf_setup(uploaded_file):
         raise FileNotFoundError("No File Uploaded")
 
 
-def generate_pdf(resume_content):
-    """Generate a well-structured and ATS-optimized PDF resume with proper headings, subheadings, and content."""
+def generate_pdf(content):
+    """Generate a well-structured PDF document."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -62,23 +68,6 @@ def generate_pdf(resume_content):
         alignment=1
     )
 
-    section_heading_style = ParagraphStyle(
-        'SectionHeadingStyle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=14,
-        spaceAfter=12,
-        spaceBefore=12
-    )
-
-    subheading_style = ParagraphStyle(
-        'SubheadingStyle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=12,
-        spaceAfter=8
-    )
-
     body_style = ParagraphStyle(
         'BodyStyle',
         parent=styles['Normal'],
@@ -88,20 +77,7 @@ def generate_pdf(resume_content):
         spaceAfter=6
     )
 
-    story = []
-
-    for section in resume_content.split('\n'):
-        if section.strip():
-            if section.startswith('**'):
-                story.append(Paragraph(f'<b>{section.strip().replace("**", "")}</b>', section_heading_style))
-            elif ':' in section:
-                subheading, text = section.split(':', 1)
-                story.append(Paragraph(f'<b>{subheading.strip()}</b>', subheading_style))
-                story.append(Paragraph(text.strip(), body_style))
-            else:
-                story.append(Paragraph(section.strip(), body_style))
-            story.append(Spacer(1, 8))
-
+    story = [Paragraph(content, body_style)]
     doc.build(story)
     buffer.seek(0)
     return buffer
@@ -160,44 +136,32 @@ Generate a list of 30 targeted interview questions for the specified job role ba
 Cover technical skills, soft skills, and scenario-based questions relevant to the role.
 """
 
-if submit1:
-    if uploaded_file:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt1, pdf_content, input_text)
-        st.subheader("The Response is:")
-        st.write(response)
-    else:
-        st.warning("Please upload a resume.")
+if submit1 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_prompt1, pdf_content, input_text)
+    st.subheader("The Response is:")
+    st.write(response)
 
-elif submit3:
-    if uploaded_file:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt3, pdf_content, input_text)
-        st.subheader("The Response is:")
-        st.write(response)
-    else:
-        st.warning("Please upload a resume.")
+elif submit3 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_prompt3, pdf_content, input_text)
+    st.subheader("The Response is:")
+    st.write(response)
 
-elif submit4:
-    if uploaded_file:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt4, pdf_content, input_text)
-        st.subheader("The Response is:")
-        st.write(response)
-    else:
-        st.warning("Please upload a resume.")
+elif submit4 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_prompt4, pdf_content, input_text)
+    st.subheader("Personalized Learning Path:")
+    st.write(response)
 
-elif submit5:
-    if uploaded_file:
-        pdf_content = input_pdf_setup(uploaded_file)
-        response = get_gemini_response(input_prompt5, pdf_content, input_text)
-        st.subheader("Updated Resume:")
-        st.write(response)
+elif submit5 and uploaded_file:
+    pdf_content = input_pdf_setup(uploaded_file)
+    response = get_gemini_response(input_prompt5, pdf_content, input_text)
+    st.subheader("Updated Resume:")
+    st.write(response)
 
-        pdf_buffer = generate_pdf(response)
-        st.download_button(label="Download Updated Resume", data=pdf_buffer, file_name="Updated_Resume.pdf", mime="application/pdf")
-    else:
-        st.warning("Please upload a resume.")
+    pdf_buffer = generate_pdf(response)
+    st.download_button(label="Download Updated Resume", data=pdf_buffer, file_name="Updated_Resume.pdf", mime="application/pdf")
 
 elif submit6:
     response = get_gemini_response(input_prompt6, [], input_text)
