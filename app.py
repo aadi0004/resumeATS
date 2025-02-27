@@ -7,8 +7,8 @@ from PIL import Image
 import pdf2image
 import google.generativeai as genai
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # Load environment variables
 load_dotenv()
@@ -46,17 +46,65 @@ def input_pdf_setup(uploaded_file):
     else:
         raise FileNotFoundError("No File Uploaded")
 
-def create_pdf(content, filename="updated_resume.pdf"):
-    """Create a professionally formatted PDF."""
+def generate_pdf(resume_content):
+    """Generate a well-structured and ATS-optimized PDF resume with proper headings, subheadings, and content."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
-    story = [Paragraph(content, styles['Normal'])]
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        spaceAfter=20,
+        alignment=1
+    )
+
+    section_heading_style = ParagraphStyle(
+        'SectionHeadingStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=14,
+        spaceAfter=12,
+        spaceBefore=12
+    )
+
+    subheading_style = ParagraphStyle(
+        'SubheadingStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=12,
+        spaceAfter=8
+    )
+
+    body_style = ParagraphStyle(
+        'BodyStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        leading=14,
+        spaceAfter=6
+    )
+
+    story = []
+
+    for section in resume_content.split('\n'):
+        if section.strip():
+            if section.startswith('**'):
+                story.append(Paragraph(f'<b>{section.strip().replace("**", "")}</b>', section_heading_style))
+            elif ':' in section:
+                subheading, text = section.split(':', 1)
+                story.append(Paragraph(f'<b>{subheading.strip()}</b>', subheading_style))
+                story.append(Paragraph(text.strip(), body_style))
+            else:
+                story.append(Paragraph(section.strip(), body_style))
+            story.append(Spacer(1, 8))
+
     doc.build(story)
     buffer.seek(0)
     return buffer
 
-# Streamlit App
 st.set_page_config(page_title="A5 ATS Resume Expert")
 st.header("MY A5 PERSONAL ATS")
 
@@ -96,8 +144,8 @@ focusing on the skills, topics, and tools specified in the provided job descript
 """
 
 input_prompt5 = """
-You are an expert resume writer and ATS optimization specialist. Using the existing resume content, improve and format it professionally to align perfectly with the job description provided.
-Ensure the updated resume is clear, well-structured, and visually appealing with proper alignment, spacing, fonts, and optimized keywords to maximize ATS scores.
+You are an experienced resume writer specializing in tech roles. Enhance the provided resume based on the job description to maximize its ATS score.
+Ensure proper formatting, use of relevant keywords, and a clean, professional layout with distinct sections and proper spacing.
 """
 
 if submit1:
@@ -130,11 +178,11 @@ elif submit4:
 elif submit5:
     if uploaded_file:
         pdf_content = input_pdf_setup(uploaded_file)
-        updated_resume = get_gemini_response(input_prompt5, pdf_content, input_text)
-        st.subheader("Updated Resume Preview:")
-        st.text(updated_resume)
+        response = get_gemini_response(input_prompt5, pdf_content, input_text)
+        st.subheader("Updated Resume:")
+        st.write(response)
 
-        pdf_file = create_pdf(updated_resume)
-        st.download_button(label="Download Updated Resume", data=pdf_file, file_name="Updated_Resume.pdf", mime="application/pdf")
+        pdf_buffer = generate_pdf(response)
+        st.download_button(label="Download Updated Resume", data=pdf_buffer, file_name="Updated_Resume.pdf", mime="application/pdf")
     else:
         st.warning("Please upload a resume.")
