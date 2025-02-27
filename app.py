@@ -119,6 +119,8 @@ submit3 = st.button("Percentage Match")
 submit4 = st.button("Personalized Learning Path")
 submit5 = st.button("Generate Updated Resume")
 
+start_month = st.selectbox("Select starting month for learning path:", ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
+
 input_prompt1 = """
 You are an experienced HR with tech expertise in Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, or Data Analysis.
 Your task is to review the provided resume against the job description for these roles.
@@ -133,10 +135,10 @@ Your task is to evaluate the resume against the job description. Provide:
 3. Final evaluation.
 """
 
-input_prompt4 = """
-You are an experienced learning coach and technical expert. Create a month-by-month 6-month personalized study plan for an individual aiming to excel in [Job Role],
+input_prompt4 = f"""
+You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role],
 focusing on the skills, topics, and tools specified in the provided job description. Ensure the study plan includes:
-- A list of topics and tools for each month.
+- A list of topics and tools for each month starting from {start_month}.
 - Suggested resources (books, online courses, documentation).
 - Recommended practical exercises or projects.
 - Periodic assessments or milestones.
@@ -146,7 +148,6 @@ focusing on the skills, topics, and tools specified in the provided job descript
 input_prompt5 = """
 You are an experienced resume writer specializing in tech roles. Enhance the provided resume based on the job description to maximize its ATS score.
 Ensure proper formatting, use of relevant keywords, and a clean, professional layout with distinct sections and proper spacing.
-Also, correct the education section by aligning it neatly and ensuring proper formatting of dates and percentages.
 """
 
 if submit1:
