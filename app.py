@@ -119,6 +119,9 @@ submit3 = st.button("Percentage Match")
 submit4 = st.button("Personalized Learning Path")
 submit5 = st.button("Generate Updated Resume")
 
+# Allow user to choose a custom duration for the learning path
+learning_duration = st.number_input("Select the duration of the learning path (in months):", min_value=1, max_value=12, value=6)
+
 start_month = st.selectbox("Select starting month for learning path:", ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"])
 
 input_prompt1 = """
@@ -136,7 +139,7 @@ Your task is to evaluate the resume against the job description. Provide:
 """
 
 input_prompt4 = f"""
-You are an experienced learning coach and technical expert. Create a 6-month personalized study plan for an individual aiming to excel in [Job Role],
+You are an experienced learning coach and technical expert. Create a {learning_duration}-month personalized study plan for an individual aiming to excel in [Job Role],
 focusing on the skills, topics, and tools specified in the provided job description. Ensure the study plan includes:
 - A list of topics and tools for each month starting from {start_month}.
 - Suggested resources (books, online courses, documentation).
