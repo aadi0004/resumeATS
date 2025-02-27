@@ -46,6 +46,7 @@ def input_pdf_setup(uploaded_file):
     else:
         raise FileNotFoundError("No File Uploaded")
 
+
 def generate_pdf(resume_content):
     """Generate a well-structured and ATS-optimized PDF resume with proper headings, subheadings, and content."""
     buffer = io.BytesIO()
@@ -118,6 +119,7 @@ submit1 = st.button("Tell Me About the Resume")
 submit3 = st.button("Percentage Match")
 submit4 = st.button("Personalized Learning Path")
 submit5 = st.button("Generate Updated Resume")
+submit6 = st.button("Generate 30 Interview Questions")
 
 # Allow user to choose a custom duration for the learning path
 learning_duration = st.number_input("Select the duration of the learning path (in months):", min_value=1, max_value=12, value=6)
@@ -151,6 +153,11 @@ focusing on the skills, topics, and tools specified in the provided job descript
 input_prompt5 = """
 You are an experienced resume writer specializing in tech roles. Enhance the provided resume based on the job description to maximize its ATS score.
 Ensure proper formatting, use of relevant keywords, and a clean, professional layout with distinct sections and proper spacing.
+"""
+
+input_prompt6 = """
+Generate a list of 30 targeted interview questions for the specified job role based on the job description provided.
+Cover technical skills, soft skills, and scenario-based questions relevant to the role.
 """
 
 if submit1:
@@ -191,3 +198,11 @@ elif submit5:
         st.download_button(label="Download Updated Resume", data=pdf_buffer, file_name="Updated_Resume.pdf", mime="application/pdf")
     else:
         st.warning("Please upload a resume.")
+
+elif submit6:
+    response = get_gemini_response(input_prompt6, [], input_text)
+    st.subheader("30 Interview Questions:")
+    st.write(response)
+
+    pdf_buffer = generate_pdf(response)
+    st.download_button(label="Download Interview Questions", data=pdf_buffer, file_name="Interview_Questions.pdf", mime="application/pdf")
