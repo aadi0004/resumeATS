@@ -21,9 +21,6 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 
-# Keep track of already generated questions
-generated_questions = set()
-
 input_prompt1 = """
 You are an experienced HR with tech expertise in Data Science, Full Stack, Web Development, Big Data Engineering, DevOps, or Data Analysis.
 Your task is to review the provided resume against the job description for these roles.
@@ -44,7 +41,7 @@ def get_gemini_response(prompt):
         return "Error: Prompt is empty. Please provide a valid prompt."
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content([prompt])
+        response = model.generate_content([prompt, f"Add unique variations each time this prompt is called: {os.urandom(8).hex()}"])
         if hasattr(response, 'text') and response.text:
             return response.text
         else:
@@ -73,49 +70,56 @@ st.button("Generate 30 Interview Questions and Answers")
 learning_path_duration = st.selectbox("Select Personalized Learning Path Duration:", ["3 Months", "6 Months", "9 Months", "12 Months"])
 
 # Dropdown for selecting interview question category
-question_category = st.selectbox("Select Question Category:", ["Python", "Machine Learning", "Deep Learning", "Docker"])
+question_category = st.selectbox("Select Question Category:", ["Python", "Machine Learning", "Deep Learning", "Docker", "Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"])
 
 # Show only one button based on selected category
-if question_category == "Python" and 'python_questions' not in generated_questions:
+if question_category == "Python":
     if st.button("30 Python Interview Questions"):
         response = get_gemini_response("Generate 30 Python interview questions and detailed answers")
         if not response.startswith("Error"):
             st.subheader("Python Interview Questions and Answers:")
             st.write(response)
-            generated_questions.add('python_questions')
-            st.download_button("Download Python Questions", response, "python_questions.txt")
+            st.download_button("Download Python Questions", response, f"python_questions_{os.urandom(4).hex()}.txt")
         else:
             st.error(response)
 
-elif question_category == "Machine Learning" and 'ml_questions' not in generated_questions:
+elif question_category == "Machine Learning":
     if st.button("30 Machine Learning Interview Questions"):
         response = get_gemini_response("Generate 30 Machine Learning interview questions and detailed answers")
         if not response.startswith("Error"):
             st.subheader("Machine Learning Interview Questions and Answers:")
             st.write(response)
-            generated_questions.add('ml_questions')
-            st.download_button("Download ML Questions", response, "ml_questions.txt")
+            st.download_button("Download ML Questions", response, f"ml_questions_{os.urandom(4).hex()}.txt")
         else:
             st.error(response)
 
-elif question_category == "Deep Learning" and 'dl_questions' not in generated_questions:
+elif question_category == "Deep Learning":
     if st.button("30 Deep Learning Interview Questions"):
         response = get_gemini_response("Generate 30 Deep Learning interview questions and detailed answers")
         if not response.startswith("Error"):
             st.subheader("Deep Learning Interview Questions and Answers:")
             st.write(response)
-            generated_questions.add('dl_questions')
-            st.download_button("Download DL Questions", response, "dl_questions.txt")
+            st.download_button("Download DL Questions", response, f"dl_questions_{os.urandom(4).hex()}.txt")
         else:
             st.error(response)
 
-elif question_category == "Docker" and 'docker_questions' not in generated_questions:
+elif question_category == "Docker":
     if st.button("30 Docker Interview Questions"):
         response = get_gemini_response("Generate 30 Docker interview questions and detailed answers")
         if not response.startswith("Error"):
             st.subheader("Docker Interview Questions and Answers:")
             st.write(response)
-            generated_questions.add('docker_questions')
-            st.download_button("Download Docker Questions", response, "docker_questions.txt")
+            st.download_button("Download Docker Questions", response, f"docker_questions_{os.urandom(4).hex()}.txt")
+        else:
+            st.error(response)
+
+# Data Engineering questions
+elif question_category in ["Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"]:
+    if st.button(f"30 {question_category} Interview Questions"):
+        response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
+        if not response.startswith("Error"):
+            st.subheader(f"{question_category} Interview Questions and Answers:")
+            st.write(response)
+            st.download_button(f"Download {question_category} Questions", response, f"{question_category.lower().replace(' ', '_')}_questions_{os.urandom(4).hex()}.txt")
         else:
             st.error(response)
