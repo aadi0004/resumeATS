@@ -6,6 +6,7 @@ import base64
 from PIL import Image
 import pdf2image
 import google.generativeai as genai
+from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -50,76 +51,98 @@ def get_gemini_response(prompt):
         st.error(f"API call failed: {str(e)}")
         return f"Error: {str(e)}"
 
-st.set_page_config(page_title="A5 ATS Resume Expert")
-st.header("MY A5 PERSONAL ATS")
+st.set_page_config(page_title="A5 ATS Resume Expert", layout='wide')
 
-input_text = st.text_area("Job Description:", key="input")
-uploaded_file = st.file_uploader("Upload your resume (PDF)...", type=['pdf'])
+# Header with a fresh style
+st.markdown("""
+    <h1 style='text-align: center; color: #4CAF50;'>MY A5 PERSONAL ATS</h1>
+    <hr style='border: 1px solid #4CAF50;'>
+""", unsafe_allow_html=True)
 
-if uploaded_file:
-    st.success("PDF Uploaded Successfully.")
+# Input section with better layout
+col1, col2 = st.columns(2)
 
-# Always visible buttons
-st.button("Tell Me About the Resume")
-st.button("Percentage Match")
-st.button("Personalized Learning Path")
-st.button("Generate Updated Resume")
-st.button("Generate 30 Interview Questions and Answers")
+with col1:
+    input_text = st.text_area("📋 Job Description:", key="input", height=150)
 
-# New dropdown for personalized learning path duration
-learning_path_duration = st.selectbox("Select Personalized Learning Path Duration:", ["3 Months", "6 Months", "9 Months", "12 Months"])
+uploaded_file = None
+resume_text = ""
+with col2:
+    uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
+    if uploaded_file:
+        st.success("✅ PDF Uploaded Successfully.")
+        try:
+            reader = PdfReader(uploaded_file)
+            for page in reader.pages:
+                if page and page.extract_text():
+                    resume_text += page.extract_text()
+        except Exception as e:
+            st.error(f"❌ Failed to read PDF: {str(e)}")
 
-# Dropdown for selecting interview question category
-question_category = st.selectbox("Select Question Category:", ["Python", "Machine Learning", "Deep Learning", "Docker", "Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"])
+# Always visible buttons styled
+st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🛠️ Quick Actions</h3>", unsafe_allow_html=True)
 
-# Show only one button based on selected category
-if question_category == "Python":
-    if st.button("30 Python Interview Questions"):
-        response = get_gemini_response("Generate 30 Python interview questions and detailed answers")
-        if not response.startswith("Error"):
-            st.subheader("Python Interview Questions and Answers:")
+action_cols = st.columns(5)
+with action_cols[0]:
+    if st.button("📖 Tell Me About the Resume"):
+        if resume_text:
+            response = get_gemini_response(f"Please review the following resume and provide a detailed evaluation: {resume_text}")
             st.write(response)
-            st.download_button("Download Python Questions", response, f"python_questions_{os.urandom(4).hex()}.txt")
         else:
-            st.error(response)
+            st.warning("⚠️ Please upload a valid resume first.")
 
-elif question_category == "Machine Learning":
-    if st.button("30 Machine Learning Interview Questions"):
-        response = get_gemini_response("Generate 30 Machine Learning interview questions and detailed answers")
-        if not response.startswith("Error"):
-            st.subheader("Machine Learning Interview Questions and Answers:")
+with action_cols[1]:
+    if st.button("📊 Percentage Match"):
+        if resume_text and input_text:
+            response = get_gemini_response(f"Evaluate the following resume against this job description and provide a percentage match:\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}")
             st.write(response)
-            st.download_button("Download ML Questions", response, f"ml_questions_{os.urandom(4).hex()}.txt")
         else:
-            st.error(response)
+            st.warning("⚠️ Please upload a resume and provide a job description.")
 
-elif question_category == "Deep Learning":
-    if st.button("30 Deep Learning Interview Questions"):
-        response = get_gemini_response("Generate 30 Deep Learning interview questions and detailed answers")
-        if not response.startswith("Error"):
-            st.subheader("Deep Learning Interview Questions and Answers:")
+with action_cols[2]:
+    if st.button("🎓 Personalized Learning Path"):
+        if resume_text:
+            response = get_gemini_response(f"Generate a personalized learning path based on this resume:\n{resume_text}")
             st.write(response)
-            st.download_button("Download DL Questions", response, f"dl_questions_{os.urandom(4).hex()}.txt")
         else:
-            st.error(response)
+            st.warning("⚠️ Please upload a resume first.")
 
-elif question_category == "Docker":
-    if st.button("30 Docker Interview Questions"):
-        response = get_gemini_response("Generate 30 Docker interview questions and detailed answers")
-        if not response.startswith("Error"):
-            st.subheader("Docker Interview Questions and Answers:")
+with action_cols[3]:
+    if st.button("📝 Generate Updated Resume"):
+        if resume_text:
+            response = get_gemini_response(f"Suggest improvements and generate an updated resume for this candidate:\n{resume_text}")
             st.write(response)
-            st.download_button("Download Docker Questions", response, f"docker_questions_{os.urandom(4).hex()}.txt")
         else:
-            st.error(response)
+            st.warning("⚠️ Please upload a resume first.")
 
-# Data Engineering questions
-elif question_category in ["Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"]:
-    if st.button(f"30 {question_category} Interview Questions"):
-        response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
-        if not response.startswith("Error"):
-            st.subheader(f"{question_category} Interview Questions and Answers:")
+with action_cols[4]:
+    if st.button("❓ Generate 30 Interview Questions and Answers"):
+        if resume_text:
+            response = get_gemini_response("Generate 30 technical interview questions and their detailed answers.")
             st.write(response)
-            st.download_button(f"Download {question_category} Questions", response, f"{question_category.lower().replace(' ', '_')}_questions_{os.urandom(4).hex()}.txt")
         else:
-            st.error(response)
+            st.warning("⚠️ Please upload a resume first.")
+
+# New dropdowns with icons
+st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🎯 Select Preferences</h3>", unsafe_allow_html=True)
+
+learning_path_duration = st.selectbox("📆 Select Personalized Learning Path Duration:", ["3 Months", "6 Months", "9 Months", "12 Months"])
+
+question_category = st.selectbox("❓ Select Question Category:", ["Python", "Machine Learning", "Deep Learning", "Docker", "Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"])
+
+# Show only one button based on selected category with better feedback
+st.markdown("---")
+
+if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
+    response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
+    if not response.startswith("Error"):
+        st.success(f"✅ {question_category} Interview Questions Generated Successfully!")
+        st.subheader(f"{question_category} Interview Questions and Answers:")
+        st.write(response)
+        st.download_button(f"💾 Download {question_category} Questions", response, f"{question_category.lower().replace(' ', '_')}_questions_{os.urandom(4).hex()}.txt")
+    else:
+        st.error(response)
+
+st.markdown("<hr style='border: 1px solid #4CAF50;'>", unsafe_allow_html=True)
