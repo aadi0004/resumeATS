@@ -41,7 +41,7 @@ st.set_page_config(page_title="A5 ATS Resume Expert", layout='wide')
 
 # Header with a fresh style
 st.markdown("""
-    <h1 style='text-align: center; color: #4CAF50;'>MY A5 PERSONAL ATS</h1>
+    <h1 style='text-align: center; color: #4CAF50;'>MY PERSONAL ATS</h1>
     <hr style='border: 1px solid #4CAF50;'>
 """, unsafe_allow_html=True)
 
@@ -115,7 +115,15 @@ with action_cols[3]:
         if resume_text:
             response = get_gemini_response(f"Suggest improvements and generate an updated resume for this candidate:\n{resume_text}")
             st.write(response)
-            st.download_button("💾 Download Updated Resume", response, "updated_resume.txt")
+            pdf_buffer = io.BytesIO()
+            doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = [Paragraph("Updated Resume", styles['Title']), Spacer(1, 12)]
+            for line in response.split('\n'):
+                story.append(Paragraph(line, styles['Normal']))
+                story.append(Spacer(1, 12))
+            doc.build(story)
+            st.download_button("💾 Download Updated Resume PDF", pdf_buffer.getvalue(), "updated_resume.pdf", "application/pdf")
         else:
             st.warning("⚠️ Please upload a resume first.")
 
@@ -136,5 +144,26 @@ with action_cols[5]:
             st.download_button("💾 Download Skill Gap Analysis", response, "skill_gap_analysis.txt")
         else:
             st.warning("⚠️ Please upload a resume and provide a job description.")
+
+
+
+# Ensure buttons for default actions remain visible
+st.markdown("---")
+
+st.markdown("<h3 style='text-align: center;'>💡 Additional Actions</h3>", unsafe_allow_html=True)
+
+question_category = st.selectbox("❓ Select Question Category:", ["Python", "Machine Learning", "Deep Learning", "Docker", "Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"])
+
+
+
+if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
+    response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
+    if not response.startswith("Error"):
+        st.success(f"✅ {question_category} Interview Questions Generated Successfully!")
+        st.subheader(f"{question_category} Interview Questions and Answers:")
+        st.write(response)
+        st.download_button(f"💾 Download {question_category} Questions", response, f"{question_category.lower().replace(' ', '_')}_questions_{os.urandom(4).hex()}.txt")
+    else:
+        st.error(response)
 
 st.markdown("<hr style='border: 1px solid #4CAF50;'>", unsafe_allow_html=True)
