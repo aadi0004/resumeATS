@@ -307,7 +307,7 @@ st.markdown("---")
 
 
 st.markdown("---")
-st.markdown("<h3 style='text-align: center;'>🛠 DSA Questions for Data Science</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center;'>🛠 DSA for Data Science</h3>", unsafe_allow_html=True)
 
  # Main DSA Questions button
 level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "Advanced"])
@@ -321,10 +321,10 @@ topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees
 
 if st.button(f"📖 Teach me {topic} with Case Studies"):
     with st.spinner("⏳ Gathering resources... Please wait"):
-        explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples.")
+        explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.")
         st.write(explanation_response)
 
-        case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science with a detailed, easy-to-understand solution.")
+        case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.")
         st.write(case_study_response)
 
 
