@@ -168,6 +168,16 @@ if st.button("🎥 Mock Interview Questions"):
 
 
 st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🛠 MNC's preparation</h3>", unsafe_allow_html=True)
+
+
+
+
+
+
+
+
+
 if 'tcs_prep' not in st.session_state:
     st.session_state.tcs_prep = False
 if 'accenture_prep' not in st.session_state:
