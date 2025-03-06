@@ -314,10 +314,18 @@ level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "
 
 if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
     with st.spinner("⏳ Loading... Please wait"):
-        response = get_gemini_response(f"Generate 30 DSA questions and answers for data science at {level} level.")
+        response = get_gemini_response(f"Generate 10 DSA questions and answers for data science at {level} level.")
         st.write(response)
 
+topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion"])
 
+if st.button(f"📖 Teach me {topic} with Case Studies"):
+    with st.spinner("⏳ Gathering resources... Please wait"):
+        explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples.")
+        st.write(explanation_response)
+
+        case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science with a detailed, easy-to-understand solution.")
+        st.write(case_study_response)
 
 
 
