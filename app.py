@@ -303,8 +303,19 @@ if st.session_state.wipro_prep:
 
 
 
+st.markdown("---")
 
 
+st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🛠 DSA Questions for Data Science</h3>", unsafe_allow_html=True)
+
+ # Main DSA Questions button
+level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "Advanced"])
+
+if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
+    with st.spinner("⏳ Loading... Please wait"):
+        response = get_gemini_response(f"Generate 30 DSA questions and answers for data science at {level} level.")
+        st.write(response)
 
 
 
