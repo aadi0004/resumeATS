@@ -317,7 +317,7 @@ if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
         response = get_gemini_response(f"Generate 10 DSA questions and answers for data science at {level} level.")
         st.write(response)
 
-topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion"])
+topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion","algorithm complexity (Big O notation)","sorting" , "searching"])
 
 if st.button(f"📖 Teach me {topic} with Case Studies"):
     with st.spinner("⏳ Gathering resources... Please wait"):
