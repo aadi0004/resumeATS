@@ -166,139 +166,111 @@ if st.button("🎥 Mock Interview Questions"):
         else:
             st.warning("⚠ Please upload a resume first.")
 
+import json
 
+if st.button("💡 AI-Driven Insights"):
+    with st.spinner("🔍 Analyzing... Please wait"):
+        if resume_text:
+            recommendations = get_gemini_response(f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}")
+            try:
+                recommendations = json.loads(recommendations)  # Attempt to parse JSON
+                st.write("📋 Smart Recommendations:")
+                st.write(recommendations.get("job_roles", "No recommendations found."))
+                st.write("📊 Market Trends:")
+                st.write(recommendations.get("market_trends", "No market trends available."))
+            except json.JSONDecodeError:
+                # Fallback if response is not JSON
+                st.write("📋 AI-Driven Insights:")
+                st.write(recommendations)
+        else:
+            st.warning("⚠ Please upload a resume first.")
+
+
+# Custom Styling for Buttons
+st.markdown("""
+    <style>
+    div.stButton > button {
+        border-radius: 8px;
+        padding: 12px 25px;
+        margin: 5px;
+        font-size: 16px;
+        font-weight: bold;
+        background-color: #222;
+        color: white;
+        border: 1px solid #555;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s;
+    }
+    div.stButton > button:hover {
+        background-color: #444;
+        border: 1px solid #999;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Page Header
 st.markdown("---")
-st.markdown("<h3 style='text-align: center;'>🛠 MNC's preparation</h3>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; color:#FFA500;'>🚀 MNC Data Science Preparation</h2>", unsafe_allow_html=True)
+st.markdown("---")
 
+# Initialize session state
+if "selected_mnc" not in st.session_state:
+    st.session_state["selected_mnc"] = None
 
+# MNCs List
+mnc_data = [
+    {"name": "TCS", "color": "#FFA500", "icon": "🎯"},
+    {"name": "Infosys", "color": "#03A9F4", "icon": "🚀"},
+    {"name": "Wipro", "color": "#9C27B0", "icon": "🔍"},
+]
 
+# Layout for MNC Selection in One Row
+col1, col2, col3 = st.columns(3)
+for col, mnc in zip([col1, col2, col3], mnc_data):
+    with col:
+        if st.button(f"{mnc['icon']} {mnc['name']}", key=f"{mnc['name']}_button"):
+            st.session_state["selected_mnc"] = mnc["name"]
 
-
-
-
-
-
-if 'tcs_prep' not in st.session_state:
-    st.session_state.tcs_prep = False
-if 'accenture_prep' not in st.session_state:
-    st.session_state.accenture_prep = False
-if 'infosys_prep' not in st.session_state:
-    st.session_state.infosys_prep = False
-if 'wipro_prep' not in st.session_state:
-    st.session_state.wipro_prep = False
-if 'capgemini_prep' not in st.session_state:
-    st.session_state.capgemini_prep = False
-
-# TCS
-if st.button("🎯 TCS Data Science Preparation"):
-    st.session_state.tcs_prep = not st.session_state.tcs_prep
-
-if st.session_state.tcs_prep:
-    with st.spinner("⏳ Loading... Please wait"):
+# Display Full-Page Response for Selected MNC
+if st.session_state["selected_mnc"]:
+    selected_mnc = st.session_state["selected_mnc"]
+    
+    st.markdown(f"<h3 style='color: #FFA500; text-align: center;'>{selected_mnc} Data Science Preparation</h3>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    with st.spinner("⏳ Analyzing your resume... Please wait"):
         if resume_text:
-            response = get_gemini_response(f"Based on the candidate's qualifications and resume data, what additional skills and knowledge are needed to secure a Data Science role at TCS?")
-            st.write(response)
+            response = get_gemini_response(f"Based on the candidate's qualifications and resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?")
+            st.info(response)
         else:
             st.warning("⚠ Please upload a resume first.")
 
-    with st.expander("📂 TCS Additional Resources"):
-        if st.button("📂 TCS Data Science Project Types and Required Skills", key="tcs_projects"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What types of Data Science projects does TCS typically work on, and what additional skills and qualifications from the candidate's resume would align best?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
+    # Additional Sections
+    if st.button("📂 Project Types & Required Skills"):
+        with st.spinner("⏳ Loading... Please wait"):
+            if resume_text:
+                response = get_gemini_response(f"What types of Data Science projects does {selected_mnc} typically work on, and what skills align best?")
+                st.success(response)
+            else:
+                st.warning("⚠ Please upload a resume first.")
 
-        if st.button("🛠 TCS Required Skills", key="tcs_skills"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at TCS, and how does the candidate's current resume reflect these?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
+    if st.button("🛠 Required Skills"):
+        with st.spinner("⏳ Loading... Please wait"):
+            if resume_text:
+                response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at {selected_mnc}?")
+                st.success(response)
+            else:
+                st.warning("⚠ Please upload a resume first.")
 
-        if st.button("💡 TCS Recommendations", key="tcs_recommendations"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at TCS?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-# Infosys
-if st.button("🎯 Infosys Data Science Preparation"):
-    st.session_state.infosys_prep = not st.session_state.infosys_prep
-
-if st.session_state.infosys_prep:
-    with st.spinner("⏳ Loading... Please wait"):
-        if resume_text:
-            response = get_gemini_response(f"Based on the candidate's qualifications and resume data, what additional skills and knowledge are needed to secure a Data Science role at Infosys?")
-            st.write(response)
-        else:
-            st.warning("⚠ Please upload a resume first.")
-
-    with st.expander("📂 Infosys Additional Resources"):
-        if st.button("📂 Infosys Data Science Project Types and Required Skills", key="infosys_projects"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What types of Data Science projects does Infosys typically work on, and what additional skills and qualifications from the candidate's resume would align best?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-        if st.button("🛠 Infosys Required Skills", key="infosys_skills"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at Infosys, and how does the candidate's current resume reflect these?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-        if st.button("💡 Infosys Recommendations", key="infosys_recommendations"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at Infosys?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-# Wipro
-if st.button("🎯 Wipro Data Science Preparation"):
-    st.session_state.wipro_prep = not st.session_state.wipro_prep
-
-if st.session_state.wipro_prep:
-    with st.spinner("⏳ Loading... Please wait"):
-        if resume_text:
-            response = get_gemini_response(f"Based on the candidate's qualifications and resume data, what additional skills and knowledge are needed to secure a Data Science role at Wipro?")
-            st.write(response)
-        else:
-            st.warning("⚠ Please upload a resume first.")
-
-    with st.expander("📂 Wipro Additional Resources"):
-        if st.button("📂 Wipro Data Science Project Types and Required Skills", key="wipro_projects"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What types of Data Science projects does Wipro typically work on, and what additional skills and qualifications from the candidate's resume would align best?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-        if st.button("🛠 Wipro Required Skills", key="wipro_skills"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at Wipro, and how does the candidate's current resume reflect these?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
-
-        if st.button("💡 Wipro Recommendations", key="wipro_recommendations"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at Wipro?")
-                    st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
+    if st.button("💡 Career Recommendations"):
+        with st.spinner("⏳ Loading... Please wait"):
+            if resume_text:
+                response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at {selected_mnc}?")
+                st.success(response)
+            else:
+                st.warning("⚠ Please upload a resume first.")
 
 
 
@@ -339,3 +311,106 @@ if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
         response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
         st.write(response)
         st.write(response)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import streamlit as st
+
+# Mock AI response function (Replace this with your actual API call)
+def get_gemini_response(prompt):
+    topic_map = {
+        "Data Science": [
+            "What is the role of data science in modern industries?",
+            "Explain the difference between supervised and unsupervised learning.",
+            "How do data cleaning techniques impact model performance?",
+            "What are the ethical concerns in data science?",
+            "How can data science be used for real-world problem-solving?"
+        ],
+        "AI": [
+            "What is Artificial Intelligence, and how does it work?",
+            "Discuss the difference between AI, Machine Learning, and Deep Learning.",
+            "What are the main applications of AI in daily life?",
+            "What are the ethical risks associated with AI development?",
+            "What is the future of AI in automation and job markets?"
+        ],
+        "Machine Learning": [
+            "Define Machine Learning and its core principles.",
+            "How does feature selection impact model accuracy?",
+            "What is the bias-variance tradeoff in ML?",
+            "Explain reinforcement learning with an example.",
+            "How do you handle overfitting in machine learning?"
+        ],
+        "Web Development": [
+            "What are the key components of web development?",
+            "Explain the difference between frontend and backend development.",
+            "How does responsive design impact user experience?",
+            "What are the security best practices for web applications?",
+            "What is the role of APIs in modern web applications?"
+        ]
+    }
+    return topic_map.get(prompt, ["No questions found."])
+
+def ai_guided_discussion():
+    st.markdown("---")
+    st.markdown("<h3 style='text-align: center;'>🤖 AI-Guided Group Discussion</h3>", unsafe_allow_html=True)
+
+    topics = ["Data Science", "AI", "Machine Learning", "Web Development"]
+    selected_topic = st.selectbox("📌 Select Discussion Topic:", topics)
+
+    # Initialize session state
+    if 'selected_topic' not in st.session_state or st.session_state.selected_topic != selected_topic:
+        st.session_state.selected_topic = selected_topic
+        st.session_state.question_index = 0
+        st.session_state.questions = get_gemini_response(selected_topic)
+        st.session_state.answers = []
+        st.session_state.feedback = []
+
+    questions = st.session_state.questions
+
+    if st.session_state.question_index < len(questions):
+        current_question = questions[st.session_state.question_index]
+        st.markdown(f"**🤖 AI:** {current_question}")
+        
+        user_response = st.text_area("✍️ Your Answer:", key=f"answer_{st.session_state.question_index}")
+
+        if st.button("Submit Answer"):
+            if not user_response.strip():
+                st.warning("⚠️ Please enter a response before submitting.")
+            else:
+                st.session_state.answers.append(user_response)
+                
+                # Get AI feedback (Mocked)
+                feedback = f"Good response! You covered {selected_topic} well."
+                st.session_state.feedback.append(feedback)
+                
+                st.markdown(f"**✅ AI Feedback:** {feedback}")
+
+                # Move to next question
+                st.session_state.question_index += 1
+                st.rerun()
+
+    else:
+        st.success("🎉 Discussion completed! Here’s a summary:")
+        for i, (q, ans, fb) in enumerate(zip(st.session_state.questions, st.session_state.answers, st.session_state.feedback)):
+            st.markdown(f"**🔹 Q{i+1}:** {q}")
+            st.markdown(f"💡 **Your Answer:** {ans}")
+            st.markdown(f"✅ **AI Feedback:** {fb}")
+            st.markdown("---")
+
+        if st.button("Restart Discussion"):
+            st.session_state.clear()
+            st.rerun()
+
+# Run the function
+ai_guided_discussion()

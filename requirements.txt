@@ -4,3 +4,15 @@ google-generativeai
 python-dotenv 
 pdf2image 
 reportlab
+# deepface 
+openai-whisper 
+transformers 
+moviepy
+youtube-transcript-api
+
+requests
+speechrecognition
+streamlit-mic-recorder
+pydub
+librosa
+numpy
