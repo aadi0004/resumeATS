@@ -72,6 +72,8 @@ st.markdown("<h3 style='text-align: center;'>🛠 Quick Actions</h3>", unsafe_al
 # Full-width response area
 response_container = st.container()
 
+
+
 # Ensure response container takes full width
 # with st.expander("📋 Response", expanded=True):
 #     response_container = st.empty()
