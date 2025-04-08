@@ -10,9 +10,9 @@ transformers
 moviepy
 youtube-transcript-api
 
-requests
-speechrecognition
-streamlit-mic-recorder
-pydub
-librosa
-numpy
+# requests
+# speechrecognition
+# streamlit-mic-recorder
+# pydub
+# librosa
+# numpy

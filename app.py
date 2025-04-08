@@ -37,7 +37,25 @@ def get_gemini_response(prompt):
         st.error(f"API call failed: {str(e)}")
         return f"Error: {str(e)}"
 
-st.set_page_config(page_title="A5 ATS Resume Expert", layout='wide')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+st.set_page_config(page_title="ResumeSmartX - AI ATS", page_icon="📄", layout='wide')
 
 # Header with a fresh style
 st.markdown("""
@@ -417,3 +435,63 @@ def ai_guided_discussion():
 
 # Run the function
 ai_guided_discussion()
+
+
+st.markdown("---")
+st.markdown("<h3 style='text-align: center;'>🛠️ Python Code Debugger</h3>", unsafe_allow_html=True)
+
+user_code = st.text_area("Paste your Python code below:", height=300)
+
+if st.button("Check & Fix Code"):
+    if user_code.strip() == "":
+        st.warning("Please enter some code.")
+    else:
+        with st.spinner("Analyzing and fixing code..."):
+            prompt = f"""
+            Analyze the following Python code for bugs, syntax errors, and logic errors.
+            If it has issues, correct them. Return the fixed code and briefly explain the changes made.
+
+            Code:
+            ```python
+            {user_code}
+            ```
+            """
+
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content([prompt])
+
+                if response:
+                    st.subheader("✅ Corrected Code")
+                    st.code(response.text, language="python")
+                else:
+                    st.error("No response from Gemini.")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+
+
+
+# Custom CSS for bottom-right placement and pop-up effect
+custom_css = """
+<style>
+    .bottom-right {
+        position: fixed;
+        bottom: 10px;
+        right: 10px;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 15px;
+        border-radius: 10px;
+        font-size: 14px;
+        box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.2);
+        transition: transform 0.3s ease-in-out;
+    }
+    
+    .bottom-right:hover {
+        transform: scale(1.1);
+    }
+</style>
+<div class="bottom-right"> <b>Built by AI Team of Regex Software </b></div>
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
