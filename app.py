@@ -10,32 +10,125 @@ from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from datetime import datetime
+import json
 
-# Load environment variables
-load_dotenv()
+# # Load environment variables
+# load_dotenv()
 
-# Configure Google Gemini API
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    st.error("GOOGLE_API_KEY not found. Please set it in your environment variables.")
-    st.stop()
+# # Configure Google Gemini API
+# API_KEY = os.getenv("GOOGLE_API_KEY")
+# if not API_KEY:
+#     st.error("GOOGLE_API_KEY not found. Please set it in your environment variables.")
+#     st.stop()
 
-genai.configure(api_key=API_KEY)
+# genai.configure(api_key=API_KEY)
 
-def get_gemini_response(prompt):
-    """Generate a response using Google Gemini API."""
+# def get_gemini_response(prompt):
+#     """Generate a response using Google Gemini API."""
+#     if not prompt.strip():
+#         return "Error: Prompt is empty. Please provide a valid prompt."
+#     try:
+#         model = genai.GenerativeModel('gemini-1.5-flash')
+#         response = model.generate_content([prompt, f"Add unique variations each time this prompt is called: {os.urandom(8).hex()}"])
+#         if hasattr(response, 'text') and response.text:
+#             return response.text
+#         else:
+#             return "Error: No valid response received from Gemini API."
+#     except Exception as e:
+#         st.error(f"API call failed: {str(e)}")
+#         return f"Error: {str(e)}"
+
+
+
+
+
+# -------------------- ✅ LOGGING SETUP START --------------------
+import os
+import csv
+import threading
+from datetime import datetime
+
+# Logging setup
+csv_lock = threading.Lock()
+
+LOG_DIR = ".logs"
+LOG_FILE = os.path.join(LOG_DIR, "api_usage_logs.csv")
+
+# Create .logs folder and CSV file if not exist
+os.makedirs(LOG_DIR, exist_ok=True)
+if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Timestamp", "Action", "API_Hits", "Tokens_Generated"])
+
+
+# Logging function
+def log_api_usage(action, tokens_generated):
+    with csv_lock:
+        with open(LOG_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().isoformat(),
+                action,
+                1,
+                tokens_generated
+            ])
+
+# -------------------- ✅ LOGGING SETUP END --------------------
+
+
+# -------------------- ✅ Gemini API Wrapper --------------------
+def get_gemini_response(prompt, action="Gemini_API_Call"):
     if not prompt.strip():
         return "Error: Prompt is empty. Please provide a valid prompt."
+
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content([prompt, f"Add unique variations each time this prompt is called: {os.urandom(8).hex()}"])
+        response = model.generate_content([
+            prompt,
+            f"Add randomness: {os.urandom(8).hex()}"
+        ])
         if hasattr(response, 'text') and response.text:
+            token_count = len(prompt.split())  # Estimate token count
+            log_api_usage(action, token_count)
             return response.text
         else:
             return "Error: No valid response received from Gemini API."
     except Exception as e:
-        st.error(f"API call failed: {str(e)}")
-        return f"Error: {str(e)}"
+        log_api_usage(f"{action}_Error", 0)
+        return f"API Error: {str(e)}"
+
+# ----------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -101,7 +194,7 @@ response_container = st.container()
 if st.button("📖 Tell Me About the Resume"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text:
-            response = get_gemini_response(f"Please review the following resume and provide a detailed evaluation: {resume_text}")
+            response = get_gemini_response(f"Please review the following resume and provide a detailed evaluation: {resume_text}",action="Tell_me_about_resume")
             st.write(response)
             st.download_button("💾 Download Resume Evaluation", response, "resume_evaluation.txt")
         else:
@@ -110,7 +203,8 @@ if st.button("📖 Tell Me About the Resume"):
 if st.button("📊 Percentage Match"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text and input_text:
-            response = get_gemini_response(f"Evaluate the following resume against this job description and provide a percentage match in first :\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}")
+            response = get_gemini_response(f"Evaluate the following resume against this job description and provide a percentage match in first :\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                                            action="Percentage_Match")
             st.write(response)
             st.download_button("💾 Download Percentage Match", response, "percentage_match.txt")
         else:
@@ -120,7 +214,8 @@ learning_path_duration = st.selectbox("📆 Select Personalized Learning Path Du
 if st.button("🎓 Personalized Learning Path"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text and input_text and learning_path_duration:
-            response = get_gemini_response(f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text} and also suggest books and other important thing")
+            response = get_gemini_response(f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text} and also suggest books and other important thing",
+                                            action="Personalized_Learning_Path")
             st.write(response)
             pdf_buffer = io.BytesIO()
             doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
@@ -138,7 +233,8 @@ if st.button("🎓 Personalized Learning Path"):
 if st.button("📝 Generate Updated Resume"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text:
-            response = get_gemini_response(f"Suggest improvements and generate an updated resume for this candidate according to job description, not more than 2 pages:\n{resume_text}")
+            response = get_gemini_response(f"Suggest improvements and generate an updated resume for this candidate according to job description, not more than 2 pages:\n{resume_text}",
+                                            action="Generate_Updated_Resume")
             st.write(response)
 
             # Convert response to PDF
@@ -165,7 +261,8 @@ if st.button("📝 Generate Updated Resume"):
 if st.button("❓ Generate 30 Interview Questions and Answers"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text:
-            response = get_gemini_response("Generate 30 technical interview questions and their detailed answers according to that job description.")
+            response = get_gemini_response("Generate 30 technical interview questions and their detailed answers according to that job description.",
+                                            action="Generate_Interview_Questions")
             st.write(response)
         else:
             st.warning("⚠ Please upload a resume first.")
@@ -174,7 +271,8 @@ if st.button("❓ Generate 30 Interview Questions and Answers"):
 if st.button("🚀 Skill Development Plan"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text and input_text:
-            response = get_gemini_response(f"Based on the resume and job description, suggest courses, books, and projects to improve the candidate's weak or missing skills.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}")
+            response = get_gemini_response(f"Based on the resume and job description, suggest courses, books, and projects to improve the candidate's weak or missing skills.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                                            action="Skill_Development_Plan")
             st.write(response)
         else:
             st.warning("⚠ Please upload a resume first.")
@@ -182,7 +280,8 @@ if st.button("🚀 Skill Development Plan"):
 if st.button("🎥 Mock Interview Questions"):
     with st.spinner("⏳ Loading... Please wait"):
         if resume_text and input_text:
-            response = get_gemini_response(f"Generate follow-up interview questions based on the resume and job description, simulating a live interview.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}")
+            response = get_gemini_response(f"Generate follow-up interview questions based on the resume and job description, simulating a live interview.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                                            action="Mock_Interview_Questions")
             st.write(response)
         else:
             st.warning("⚠ Please upload a resume first.")
@@ -192,7 +291,8 @@ import json
 if st.button("💡 AI-Driven Insights"):
     with st.spinner("🔍 Analyzing... Please wait"):
         if resume_text:
-            recommendations = get_gemini_response(f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}")
+            recommendations = get_gemini_response(f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}",
+                                                   action="AI_Driven_Insights")
             try:
                 recommendations = json.loads(recommendations)  # Attempt to parse JSON
                 st.write("📋 Smart Recommendations:")
@@ -263,7 +363,8 @@ if st.session_state["selected_mnc"]:
     
     with st.spinner("⏳ Analyzing your resume... Please wait"):
         if resume_text:
-            response = get_gemini_response(f"Based on the candidate's qualifications and resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?")
+            response = get_gemini_response(f"Based on the candidate's qualifications and resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?",
+                                            action="Additional_Skills_MNCS")
             st.info(response)
         else:
             st.warning("⚠ Please upload a resume first.")
@@ -272,7 +373,8 @@ if st.session_state["selected_mnc"]:
     if st.button("📂 Project Types & Required Skills"):
         with st.spinner("⏳ Loading... Please wait"):
             if resume_text:
-                response = get_gemini_response(f"What types of Data Science projects does {selected_mnc} typically work on, and what skills align best?")
+                response = get_gemini_response(f"What types of Data Science projects does {selected_mnc} typically work on, and what skills align best?",
+                                                action="Project_Types_Skills")
                 st.success(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -280,7 +382,8 @@ if st.session_state["selected_mnc"]:
     if st.button("🛠 Required Skills"):
         with st.spinner("⏳ Loading... Please wait"):
             if resume_text:
-                response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at {selected_mnc}?")
+                response = get_gemini_response(f"What key technical and soft skills are needed for a Data Science role at {selected_mnc}?",
+                                                action="Required_Skills")
                 st.success(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -288,7 +391,8 @@ if st.session_state["selected_mnc"]:
     if st.button("💡 Career Recommendations"):
         with st.spinner("⏳ Loading... Please wait"):
             if resume_text:
-                response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at {selected_mnc}?")
+                response = get_gemini_response(f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at {selected_mnc}?",
+                                                action="Career_Recommendations")
                 st.success(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -307,17 +411,20 @@ level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "
 
 if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
     with st.spinner("⏳ Loading... Please wait"):
-        response = get_gemini_response(f"Generate 10 DSA questions and answers for data science at {level} level.")
+        response = get_gemini_response(f"Generate 10 DSA questions and answers for data science at {level} level.",
+                                        action="DSA_Questions")
         st.write(response)
 
 topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion","algorithm complexity (Big O notation)","sorting" , "searching"])
 
 if st.button(f"📖 Teach me {topic} with Case Studies"):
     with st.spinner("⏳ Gathering resources... Please wait"):
-        explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.")
+        explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.",
+                                                    action="Teach_me_DSA_Topics")
         st.write(explanation_response)
 
-        case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.")
+        case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.",
+                                                  action="Case_Study_DSA_Topics")
         st.write(case_study_response)
 
 
@@ -329,7 +436,8 @@ question_category = st.selectbox("❓ Select Question Category:", ["Python", "Ma
 
 if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
     with st.spinner("⏳ Loading... Please wait"):
-        response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers")
+        response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers",
+                                        action="Interview_Questions")
         st.write(response)
         st.write(response)
 
@@ -349,7 +457,7 @@ if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
 import streamlit as st
 
 # Mock AI response function (Replace this with your actual API call)
-def get_gemini_response(prompt):
+def get_gemini_response(prompt, action="Gemini"):
     topic_map = {
         "Data Science": [
             "What is the role of data science in modern industries?",
@@ -393,7 +501,7 @@ def ai_guided_discussion():
     if 'selected_topic' not in st.session_state or st.session_state.selected_topic != selected_topic:
         st.session_state.selected_topic = selected_topic
         st.session_state.question_index = 0
-        st.session_state.questions = get_gemini_response(selected_topic)
+        st.session_state.questions = get_gemini_response(selected_topic, action="AI_Guided_Discussion")
         st.session_state.answers = []
         st.session_state.feedback = []
 
