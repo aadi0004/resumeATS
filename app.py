@@ -124,45 +124,6 @@ def get_gemini_response(prompt, action="Gemini_API_Call"):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 st.set_page_config(page_title="ResumeSmartX - AI ATS", page_icon="📄", layout='wide')
 
 # Header with a fresh style
@@ -595,18 +556,18 @@ if st.button("Check & Fix Code"):
 
 # if st.button("Talk to AI Interviewer"):
 #     with st.spinner("working ... "):
-            st.markdown("""
-        <h1 style='text-align: center; color: #4CAF50;'>Talk to AI Interviewer 🤖🎤</h1>
-        <hr style='border: 1px solid #4CAF50;'>
-        <p style='text-align: center;'>Start a real-time voice conversation with our AI agent powered by ElevenLabs.</p>
-        <div style='text-align: center;'>
-            <a href='https://elevenlabs.io/app/talk-to?agent_id=Sy2RXopFB3RH3mhEicI3' target='_blank'>
-                <button style='padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer;'>
-                    🚀 Launch Voice Interview Agent
-                </button>
-            </a>
-        </div>
-    """, unsafe_allow_html=True)
+#             st.markdown("""
+#         <h1 style='text-align: center; color: #4CAF50;'>Talk to AI Interviewer 🤖🎤</h1>
+#         <hr style='border: 1px solid #4CAF50;'>
+#         <p style='text-align: center;'>Start a real-time voice conversation with our AI agent powered by ElevenLabs.</p>
+#         <div style='text-align: center;'>
+#             <a href='https://elevenlabs.io/app/talk-to?agent_id=Sy2RXopFB3RH3mhEicI3' target='_blank'>
+#                 <button style='padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer;'>
+#                     🚀 Launch Voice Interview Agent
+#                 </button>
+#             </a>
+#         </div>
+#     """, unsafe_allow_html=True)
 
 
 # Custom CSS for bottom-right placement and pop-up effect
