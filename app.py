@@ -42,7 +42,6 @@ import json
 
 
 
-
 # -------------------- ✅ LOGGING SETUP START --------------------
 import os
 import csv
@@ -60,21 +59,38 @@ os.makedirs(LOG_DIR, exist_ok=True)
 if not os.path.exists(LOG_FILE):
     with open(LOG_FILE, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Timestamp", "Action", "API_Hits", "Tokens_Generated"])
+        writer.writerow(["Timestamp", "Action", "API_Hits", "Tokens_Generated", "Total_Tokens_Till_Now"])
+
+
+# Helper to calculate current total tokens from the CSV file
+def get_current_total_tokens():
+    total = 0
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    total += int(row.get("Tokens_Generated", 0))
+                except ValueError:
+                    continue
+    return total
 
 
 # Logging function
 def log_api_usage(action, tokens_generated):
     with csv_lock:
+        current_total = get_current_total_tokens()
+        new_total = current_total + tokens_generated
+
         with open(LOG_FILE, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 datetime.now().isoformat(),
                 action,
                 1,
-                tokens_generated
+                tokens_generated,
+                new_total
             ])
-
 # -------------------- ✅ LOGGING SETUP END --------------------
 
 
@@ -98,8 +114,7 @@ def get_gemini_response(prompt, action="Gemini_API_Call"):
     except Exception as e:
         log_api_usage(f"{action}_Error", 0)
         return f"API Error: {str(e)}"
-
-# ----------------------------------
+# ----------------------------------------------------------------
 
 
 
@@ -578,6 +593,20 @@ if st.button("Check & Fix Code"):
                 st.error(f"Error: {e}")
 
 
+# if st.button("Talk to AI Interviewer"):
+#     with st.spinner("working ... "):
+            st.markdown("""
+        <h1 style='text-align: center; color: #4CAF50;'>Talk to AI Interviewer 🤖🎤</h1>
+        <hr style='border: 1px solid #4CAF50;'>
+        <p style='text-align: center;'>Start a real-time voice conversation with our AI agent powered by ElevenLabs.</p>
+        <div style='text-align: center;'>
+            <a href='https://elevenlabs.io/app/talk-to?agent_id=Sy2RXopFB3RH3mhEicI3' target='_blank'>
+                <button style='padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer;'>
+                    🚀 Launch Voice Interview Agent
+                </button>
+            </a>
+        </div>
+    """, unsafe_allow_html=True)
 
 
 # Custom CSS for bottom-right placement and pop-up effect
