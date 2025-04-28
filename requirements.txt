@@ -35,7 +35,7 @@ google-generativeai
 python-dotenv
 pdf2image
 reportlab
-openai-whisper
+# openai-whisper
 transformers
 youtube-transcript-api
 elevenlabs
