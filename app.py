@@ -79,7 +79,7 @@ def log_api_usage(action, tokens_generated):
             ])
 # -------------------- ✅ LOGGING SETUP END --------------------
 # PostgreSQL DB Logging
-def log_to_postgres(action, question, response):
+def log_to_postgres(action, response):
     try:
         conn = psycopg2.connect(
             host=os.getenv("PG_HOST"),
@@ -93,15 +93,14 @@ def log_to_postgres(action, question, response):
             CREATE TABLE IF NOT EXISTS button_logs (
                 id SERIAL PRIMARY KEY,
                 action VARCHAR(255),
-                question TEXT,
                 response TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cursor.execute("""
-            INSERT INTO button_logs (action, question, response)
-            VALUES (%s, %s, %s)
-        """, (action, question, response))
+            INSERT INTO button_logs (action, response)
+            VALUES (%s, %s)
+        """, (action, response))
         conn.commit()
         cursor.close()
         conn.close()
@@ -239,7 +238,7 @@ if selected_tab == "🏆 Resume Analysis":
                 prompt_text = f"Please review the following resume and provide a detailed evaluation: {resume_text}"
                 
                 response = get_gemini_response(prompt_text, action="Tell_me_about_resume")
-                log_to_postgres("Tell_me_about_resume", prompt_text, response)
+                log_to_postgres("Tell_me_about_resume", response)
                 st.write(response)
 
                 st.download_button("💾 Download Resume Evaluation", response, "resume_evaluation.txt")
@@ -299,6 +298,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text and input_text:
                 response = get_gemini_response(f"Evaluate the following resume against this job description and provide a percentage match in first :\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
                                                 action="Percentage_Match")
+                log_to_postgres("Percentage_Match", response)
                 st.write(response)
                 st.download_button("💾 Download Percentage Match", response, "percentage_match.txt")
             else:
@@ -310,6 +310,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text and input_text and learning_path_duration:
                 response = get_gemini_response(f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text} and also suggest books and other important thing",
                                                 action="Personalized_Learning_Path")
+                log_to_postgres("Personalized_Learning_Path", response)
                 st.write(response)
                 pdf_buffer = io.BytesIO()
                 doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
@@ -329,6 +330,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text:
                 response = get_gemini_response(f"Suggest improvements and generate an updated resume for this candidate according to job description, not more than 2 pages:\n{resume_text}",
                                                 action="Generate_Updated_Resume")
+                log_to_postgres("Generate_Updated_Resume", response)
                 st.write(response)
 
                 # Convert response to PDF
@@ -357,6 +359,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text:
                 response = get_gemini_response("Generate 30 technical interview questions and their detailed answers according to that job description.",
                                                 action="Generate_Interview_Questions")
+                log_to_postgres("Generate_Interview_Questions", response)
                 st.write(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -367,6 +370,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text and input_text:
                 response = get_gemini_response(f"Based on the resume and job description, suggest courses, books, and projects to improve the candidate's weak or missing skills.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
                                                 action="Skill_Development_Plan")
+                log_to_postgres("Skill_Development_Plan", response)
                 st.write(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -376,6 +380,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text and input_text:
                 response = get_gemini_response(f"Generate follow-up interview questions based on the resume and job description, simulating a live interview.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
                                                 action="Mock_Interview_Questions")
+                log_to_postgres("Mock_Interview_Questions", response)
                 st.write(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -387,6 +392,7 @@ if selected_tab == "🏆 Resume Analysis":
             if resume_text:
                 recommendations = get_gemini_response(f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}",
                                                     action="AI_Driven_Insights")
+                log_to_postgres("AI_Driven_Insights", response)
                 try:
                     recommendations = json.loads(recommendations)  # Attempt to parse JSON
                     st.write("📋 Smart Recommendations:")
@@ -433,7 +439,9 @@ elif selected_tab == "🔝Top 3 MNCs":
                 response = get_gemini_response(
                     f"Based on the candidate's qualifications and resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?",
                     action="Additional_Skills_MNCS"
+                    
                 )
+                log_to_postgres("Additional_Skills_MNCS", response)
                 st.info(response)
             else:
                 st.warning("⚠ Please upload a resume first.")
@@ -446,6 +454,7 @@ elif selected_tab == "🔝Top 3 MNCs":
                         f"What types of Data Science projects does {selected_mnc} typically work on, and what skills align best?",
                         action="Project_Types_Skills"
                     )
+                    log_to_postgres("Project_Types_Skills", response)
                     st.success(response)
                 else:
                     st.warning("⚠ Please upload a resume first.")
@@ -458,6 +467,7 @@ elif selected_tab == "🔝Top 3 MNCs":
                         f"What key technical and soft skills are needed for a Data Science role at {selected_mnc}?",
                         action="Required_Skills"
                     )
+                    log_to_postgres("Required_Skills", response)
                     st.success(response)
                 else:
                     st.warning("⚠ Please upload a resume first.")
@@ -470,6 +480,7 @@ elif selected_tab == "🔝Top 3 MNCs":
                         f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at {selected_mnc}?",
                         action="Career_Recommendations"
                     )
+                    log_to_postgres("Career_Recommendations", response)
                     st.success(response)
                 else:
                     st.warning("⚠ Please upload a resume first.")
@@ -489,7 +500,9 @@ elif selected_tab == "📊 DSA & Data Science":
         with st.spinner("⏳ Loading... Please wait"):
             response = get_gemini_response(f"Generate 10 DSA questions and answers for data science at {level} level.",
                                             action="DSA_Questions")
+            log_to_postgres("DSA_Questions", response)
             st.write(response)
+
 
     topic = st.selectbox("🗂 Select DSA Topic:", ["Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", "Recursion","algorithm complexity (Big O notation)","sorting" , "searching"])
 
@@ -497,10 +510,12 @@ elif selected_tab == "📊 DSA & Data Science":
         with st.spinner("⏳ Gathering resources... Please wait"):
             explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.",
                                                         action="Teach_me_DSA_Topics")
+            log_to_postgres("Teach_me_DSA_Topics", response)
             st.write(explanation_response)
 
             case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.",
                                                     action="Case_Study_DSA_Topics")
+            log_to_postgres("Case_Study_DSA_Topics", response)
             st.write(case_study_response)
 
 
@@ -517,6 +532,7 @@ elif selected_tab == "📚 Question Bank":
         with st.spinner("⏳ Loading... Please wait"):
             response = get_gemini_response(f"Generate 30 {question_category} interview questions and detailed answers",
                                             action="Interview_Questions")
+            log_to_postgres("Interview_Questions", response)
             st.write(response)
             st.write(response)
 

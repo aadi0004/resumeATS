@@ -19,34 +19,6 @@ import streamlit.components.v1 as components
 import requests
 
 
-
-# # Load environment variables
-# load_dotenv()
-
-# # Configure Google Gemini API
-# API_KEY = os.getenv("GOOGLE_API_KEY")
-# if not API_KEY:
-#     st.error("GOOGLE_API_KEY not found. Please set it in your environment variables.")
-#     st.stop()
-
-# genai.configure(api_key=API_KEY)
-
-# def get_gemini_response(prompt):
-#     """Generate a response using Google Gemini API."""
-#     if not prompt.strip():
-#         return "Error: Prompt is empty. Please provide a valid prompt."
-#     try:
-#         model = genai.GenerativeModel('gemini-1.5-flash')
-#         response = model.generate_content([prompt, f"Add unique variations each time this prompt is called: {os.urandom(8).hex()}"])
-#         if hasattr(response, 'text') and response.text:
-#             return response.text
-#         else:
-#             return "Error: No valid response received from Gemini API."
-#     except Exception as e:
-#         st.error(f"API call failed: {str(e)}")
-#         return f"Error: {str(e)}"
-
-
 from dotenv import load_dotenv
 import os
 
@@ -129,53 +101,6 @@ def get_gemini_response(prompt, action="Gemini_API_Call"):
         log_api_usage(f"{action}_Error", 0)
         return f"API Error: {str(e)}"
 # ----------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 st.set_page_config(page_title="ResumeSmartX - AI ATS", page_icon="📄", layout='wide')
 # Sidebar Navigation
