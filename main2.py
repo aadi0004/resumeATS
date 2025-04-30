@@ -232,6 +232,7 @@ if selected_tab == "🏆 Resume Analysis":
 
     #             except Exception as e:
     #                 st.error(f"❌ Error generating audio: {str(e)}")
+
     if st.button("📖 Tell Me About the Resume"):
         with st.spinner("⏳ Loading... Please wait"):
             if resume_text:
