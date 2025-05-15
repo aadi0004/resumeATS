@@ -593,4 +593,5 @@ custom_css = """
 <div class="bottom-right"> <b>Built by AI Team of Regex Software </b></div>
 """
 
+
 st.markdown(custom_css, unsafe_allow_html=True)

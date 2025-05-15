@@ -107,6 +107,35 @@ def log_to_postgres(action, response):
     except Exception as e:
         st.error(f"PostgreSQL logging failed: {e}")
 
+def save_resume_to_postgres(filename, resume_text):
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("PG_HOST"),
+            port=os.getenv("PG_PORT"),
+            user=os.getenv("PG_USER"),
+            password=os.getenv("PG_PASSWORD"),
+            dbname=os.getenv("PG_DB")
+        )
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS resumes (
+                id SERIAL PRIMARY KEY,
+                filename VARCHAR(255),
+                resume_text TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO resumes (filename, resume_text)
+            VALUES (%s, %s)
+        """, (filename, resume_text))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ Failed to save resume to PostgreSQL: {e}")
+
+
 # -------------------- ✅ Gemini API Wrapper --------------------
 def get_gemini_response(prompt, action="Gemini_API_Call"):
     if not prompt.strip():
@@ -161,16 +190,18 @@ if selected_tab == "🏆 Resume Analysis":
         uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
         if uploaded_file:
             st.success("✅ PDF Uploaded Successfully.")
+            resume_text = ""
             try:
                 reader = PdfReader(uploaded_file)
                 for page in reader.pages:
                     if page and page.extract_text():
                         resume_text += page.extract_text()
-                # Store resume_text in session state
+                # Store in session state
                 st.session_state['resume_text'] = resume_text
+                # Save to PostgreSQL
+                save_resume_to_postgres(uploaded_file.name, resume_text)
             except Exception as e:
                 st.error(f"❌ Failed to read PDF: {str(e)}")
-
 
     # Always visible buttons styled
     st.markdown("---")
@@ -510,12 +541,12 @@ elif selected_tab == "📊 DSA & Data Science":
         with st.spinner("⏳ Gathering resources... Please wait"):
             explanation_response = get_gemini_response(f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.",
                                                         action="Teach_me_DSA_Topics")
-            log_to_postgres("Teach_me_DSA_Topics", response)
+            log_to_postgres("Teach_me_DSA_Topics", explanation_response)
             st.write(explanation_response)
 
             case_study_response = get_gemini_response(f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.",
                                                     action="Case_Study_DSA_Topics")
-            log_to_postgres("Case_Study_DSA_Topics", response)
+            log_to_postgres("Case_Study_DSA_Topics", case_study_response)
             st.write(case_study_response)
 
 
@@ -669,6 +700,8 @@ elif selected_tab == "🛠️ Code Debugger":
                     if response:
                         st.subheader("✅ Corrected Code")
                         st.code(response.text, language="python")
+                        response= st.code(response.text, language="python")
+                        log_to_postgres("Corrected Code", response)
                     else:
                         st.error("No response from Gemini.")
                 except Exception as e:
