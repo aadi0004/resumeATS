@@ -1,6 +1,5 @@
 streamlit
 PyPDF2
-python-docx
 python-dotenv
 pdf2image
 google-generativeai
@@ -8,6 +7,8 @@ reportlab
 psycopg2-binary
 bcrypt
 elevenlabs
+twilio
+pandas
 
 
 
@@ -33,5 +34,3 @@ docx2txt
 fpdf
 psycopg2-binary
 bcrypt
-smtplib
-email

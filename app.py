@@ -3,11 +3,10 @@ import io
 import os
 import json
 import threading
-from datetime import datetime
-from typing import List, Optional, Union
-
-import bcrypt
 import csv
+from datetime import datetime, timedelta
+from typing import Optional, Union
+import pandas as pd
 import streamlit as st
 from PIL import Image
 import pdf2image
@@ -21,8 +20,7 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from elevenlabs.client import ElevenLabs
 from dotenv import load_dotenv
-import smtplib  # Built-in
-from email.mime.text import MIMEText  # Built-in
+from twilio.rest import Client
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +35,9 @@ load_dotenv()
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
 AGENT_ID = os.getenv("AGENT_ID")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+TWILIO_SID = os.getenv("TWILIO_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+VERIFY_SERVICE_SID = os.getenv("VERIFY_SERVICE_SID")
 
 # Configure Gemini API
 if GOOGLE_API_KEY:
@@ -57,6 +58,14 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize ElevenLabs client: {e}")
     st.error("ElevenLabs initialization failed. Please check your ELEVEN_API_KEY.")
+
+# Initialize Twilio client
+try:
+    twilio_client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
+    logger.info("Twilio client initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize Twilio client: {e}")
+    st.error("Twilio initialization failed. Please check your TWILIO_SID and TWILIO_AUTH_TOKEN.")
 
 # Initialize database connection pool
 try:
@@ -124,8 +133,10 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                email VARCHAR(255),
+                password TEXT,
+                phone_number VARCHAR(15),
+                theme VARCHAR(10) DEFAULT 'Light',
+                otp_code VARCHAR(6),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -145,6 +156,7 @@ def init_db():
                 resume_text TEXT,
                 user_id INTEGER REFERENCES users(id),
                 version_label VARCHAR(255),
+                version_number INTEGER DEFAULT 1,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -169,6 +181,34 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_usage (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                action VARCHAR(255),
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS learning_goals (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                goal TEXT,
+                status VARCHAR(50) DEFAULT 'Pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS job_alerts (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                job_title VARCHAR(255),
+                company VARCHAR(255),
+                description TEXT,
+                apply_link VARCHAR(512),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
         cursor.close()
         logger.info("Database tables initialized successfully")
@@ -178,12 +218,11 @@ def init_db():
     finally:
         DB_POOL.putconn(conn)
 
-def register_user(username: str, password: str, email: str) -> bool:
+def register_user(username: str, phone_number: str) -> bool:
     conn = DB_POOL.getconn()
     try:
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, password, email) VALUES (%s, %s, %s)", (username, hashed_password, email))
+        cursor.execute("INSERT INTO users (username, phone_number) VALUES (%s, %s)", (username, phone_number))
         conn.commit()
         cursor.close()
         logger.info(f"User registered: {username}")
@@ -199,26 +238,62 @@ def register_user(username: str, password: str, email: str) -> bool:
     finally:
         DB_POOL.putconn(conn)
 
-def login_user(username: str, password: str) -> bool:
-    conn = DB_POOL.getconn()
+def send_otp(phone_number: str) -> bool:
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
-        result = cursor.fetchone()
-        cursor.close()
-        if result and bcrypt.checkpw(password.encode('utf-8'), result[0].encode('utf-8')):
-            logger.info(f"User logged in: {username}")
+        verification = twilio_client.verify.v2.services(VERIFY_SERVICE_SID).verifications.create(
+            to=phone_number, channel="sms"
+        )
+        if verification.status == "pending":
+            logger.info(f"OTP sent to {phone_number}")
             return True
-        else:
-            st.error("Invalid username or password.")
-            logger.warning(f"Login failed for {username}: Invalid credentials")
-            return False
-    except Exception as e:
-        st.error(f"Login failed: {e}")
-        logger.error(f"Login failed for {username}: {e}")
         return False
-    finally:
-        DB_POOL.putconn(conn)
+    except Exception as e:
+        logger.error(f"Failed to send OTP to {phone_number}: {e}")
+        st.error(f"Failed to send OTP: {e}")
+        return False
+
+def verify_otp(phone_number: str, otp_code: str) -> bool:
+    try:
+        verification_check = twilio_client.verify.v2.services(VERIFY_SERVICE_SID).verification_checks.create(
+            to=phone_number, code=otp_code
+        )
+        if verification_check.status == "approved":
+            conn = DB_POOL.getconn()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET otp_code = NULL WHERE phone_number = %s", (phone_number,))
+            conn.commit()
+            cursor.close()
+            DB_POOL.putconn(conn)
+            logger.info(f"OTP verified for {phone_number}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to verify OTP for {phone_number}: {e}")
+        st.error(f"Invalid OTP: {e}")
+        return False
+
+def login_user(phone_number: str, otp_code: str) -> bool:
+    if verify_otp(phone_number, otp_code):
+        conn = DB_POOL.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT username FROM users WHERE phone_number = %s", (phone_number,))
+            result = cursor.fetchone()
+            cursor.close()
+            if result:
+                logger.info(f"User logged in: {result[0]}")
+                return True
+            else:
+                st.error("Phone number not registered.")
+                logger.warning(f"Login failed for {phone_number}: Not registered")
+                return False
+        except Exception as e:
+            st.error(f"Login failed: {e}")
+            logger.error(f"Login failed for {phone_number}: {e}")
+            return False
+        finally:
+            DB_POOL.putconn(conn)
+    return False
 
 def log_to_postgres(action: str, response: str):
     conn = DB_POOL.getconn()
@@ -237,52 +312,73 @@ def log_to_postgres(action: str, response: str):
     finally:
         DB_POOL.putconn(conn)
 
-def save_resume_to_postgres(filename: str, resume_text: str, version_label: str) -> Union[int, None]:
+def save_resume_to_postgres(filename: str, resume_text: str, version_label: str, version_number: int = 1) -> Union[int, None]:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
         user_id = cursor.fetchone()[0]
         cursor.execute(
-            "INSERT INTO resumes (filename, resume_text, user_id, version_label) VALUES (%s, %s, %s, %s) RETURNING id",
-            (filename, resume_text, user_id, version_label)
+            "SELECT id, version_number FROM resumes WHERE filename = %s AND user_id = %s ORDER BY version_number DESC LIMIT 1",
+            (filename, user_id)
         )
+        existing_resume = cursor.fetchone()
+        if existing_resume:
+            new_version = existing_resume[1] + 1
+            cursor.execute(
+                "INSERT INTO resumes (filename, resume_text, user_id, version_label, version_number) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (filename, resume_text, user_id, version_label, new_version)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO resumes (filename, resume_text, user_id, version_label, version_number) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (filename, resume_text, user_id, version_label, version_number)
+            )
         resume_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
-        logger.info(f"Saved resume to Postgres: {filename}, version: {version_label}")
+        logger.info(f"Saved resume: {filename}, version: {version_label}, version_number: {version_number}")
         return resume_id
     except Exception as e:
-        st.error(f"Failed to save resume to PostgreSQL: {e}")
+        st.error(f"Failed to save resume: {e}")
         logger.error(f"Failed to save resume: {e}")
         return None
     finally:
         DB_POOL.putconn(conn)
 
-def send_email(to_email: str, subject: str, body: str) -> bool:
-    if not os.getenv("EMAIL_SENDER") or not os.getenv("EMAIL_PASSWORD"):
-        st.error("Email configuration missing. Please set EMAIL_SENDER and EMAIL_PASSWORD in .env.")
-        logger.error("Email configuration missing in .env")
-        return False
-    msg = MIMEText(body)
-    msg['Subject'] = subject
-    msg['From'] = os.getenv("EMAIL_SENDER")
-    msg['To'] = to_email
+def check_api_quota(user_id: int) -> bool:
+    DAILY_QUOTA = 50
+    conn = DB_POOL.getconn()
     try:
-        with smtplib.SMTP(os.getenv("SMTP_SERVER"), os.getenv("SMTP_PORT")) as server:
-            server.starttls()
-            server.login(os.getenv("EMAIL_SENDER"), os.getenv("EMAIL_PASSWORD"))
-            server.sendmail(os.getenv("EMAIL_SENDER"), to_email, msg.as_string())
-        logger.info(f"Email sent to {to_email}: {subject}")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM api_usage WHERE user_id = %s AND timestamp > %s",
+            (user_id, datetime.now() - timedelta(days=1))
+        )
+        count = cursor.fetchone()[0]
+        cursor.close()
+        if count >= DAILY_QUOTA:
+            st.error("Daily API quota reached. Try again tomorrow.")
+            logger.warning(f"User {user_id} reached API quota")
+            return False
         return True
-    except smtplib.SMTPAuthenticationError:
-        st.error("Email authentication failed. Please check your EMAIL_SENDER and EMAIL_PASSWORD.")
-        logger.error(f"SMTP authentication failed for {os.getenv('EMAIL_SENDER')}")
-        return False
     except Exception as e:
-        st.error(f"Failed to send email: {e}")
-        logger.error(f"Failed to send email to {to_email}: {e}")
+        logger.error(f"Failed to check API quota: {e}")
         return False
+    finally:
+        DB_POOL.putconn(conn)
+
+def log_api_call(user_id: int, action: str):
+    conn = DB_POOL.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO api_usage (user_id, action) VALUES (%s, %s)", (user_id, action))
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Failed to log API call: {e}")
+    finally:
+        DB_POOL.putconn(conn)
 
 # -------------------- Gemini API Wrapper --------------------
 def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
@@ -292,6 +388,12 @@ def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+        user_id = cursor.fetchone()[0]
+        if not check_api_quota(user_id):
+            cursor.close()
+            DB_POOL.putconn(conn)
+            return "Error: API quota exceeded."
         cursor.execute("SELECT response FROM api_cache WHERE action = %s AND prompt = %s", (action, prompt))
         cached = cursor.fetchone()
         if cached:
@@ -304,6 +406,7 @@ def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
         if hasattr(response, 'text') and response.text:
             token_count = len(prompt.split())
             log_api_usage(action, token_count)
+            log_api_call(user_id, action)
             cursor.execute("INSERT INTO api_cache (action, prompt, response) VALUES (%s, %s, %s)", (action, prompt, response.text))
             conn.commit()
             cursor.close()
@@ -336,6 +439,69 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 if 'selected_tab' not in st.session_state:
     st.session_state.selected_tab = "Login"
+if 'otp_sent' not in st.session_state:
+    st.session_state.otp_sent = False
+if 'phone_number' not in st.session_state:
+    st.session_state.phone_number = None
+
+# Apply theme
+def apply_theme():
+    conn = DB_POOL.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT theme FROM users WHERE username = %s", (st.session_state.username,))
+        theme = cursor.fetchone()
+        cursor.close()
+        theme = theme[0] if theme else 'Light'
+    except Exception:
+        theme = 'Light'
+    finally:
+        DB_POOL.putconn(conn)
+    css = """
+    <style>
+        body, .stApp {
+            background-color: %s;
+            color: %s;
+        }
+        .stButton>button {
+            width: 100%;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        @media (max-width: 600px) {
+            .stColumn {
+                display: block;
+                width: 100%;
+            }
+            .stTextInput, .stTextArea {
+                width: 100% !important;
+            }
+        }
+        .bottom-right {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+    </style>
+    <div class="bottom-right"><b>Built by AI Team</b></div>
+    """
+    if theme == 'Dark':
+        st.markdown(css % ('#1E1E1E', '#FFFFFF'), unsafe_allow_html=True)
+    elif theme == 'Auto':
+        st.markdown("""
+        <style>
+            @media (prefers-color-scheme: dark) {
+                body, .stApp { background-color: #1E1E1E; color: #FFFFFF; }
+            }
+        </style>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(css % ('#FFFFFF', '#000000'), unsafe_allow_html=True)
 
 # Sidebar Navigation
 try:
@@ -349,45 +515,96 @@ if not st.session_state.authenticated:
 else:
     st.session_state.selected_tab = st.sidebar.radio("Choose a Feature", [
         "🏆 Resume Analysis", "📚 Question Bank", "📊 DSA & Data Science", "🔝 Top 3 MNCs",
-        "🛠️ Code Debugger", "🤖 Voice Agent Chat", "📜 History", "📊 Dashboard", "📋 Job Tracker"
+        "🛠️ Code Debugger", "🤖 Voice Agent Chat", "📜 History", "📊 Dashboard",
+        "📋 Job Tracker", "✍️ Resume Builder"
     ])
+    theme = st.sidebar.selectbox("Theme", ["Light", "Dark", "Auto"], key="theme")
+    conn = DB_POOL.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET theme = %s WHERE username = %s", (theme, st.session_state.username))
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Failed to update theme: {e}")
+    finally:
+        DB_POOL.putconn(conn)
+    apply_theme()
 
 # Login Page
 if st.session_state.selected_tab == "Login" and not st.session_state.authenticated:
     st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Login to ResumeSmartX</h1>", unsafe_allow_html=True)
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
-        if submit:
-            if login_user(username, password):
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.selected_tab = "🏆 Resume Analysis"
-                st.success("Logged in successfully!")
-                st.rerun()
+    if not st.session_state.otp_sent:
+        with st.form("login_form"):
+            phone_number = st.text_input("Phone Number (e.g., +919876543210)")
+            submit = st.form_submit_button("Send OTP")
+            if submit:
+                if phone_number and phone_number.startswith("+") and len(phone_number) >= 10:
+                    if send_otp(phone_number):
+                        st.session_state.otp_sent = True
+                        st.session_state.phone_number = phone_number
+                        st.success("OTP sent to your phone number!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to send OTP. Please try again.")
+                else:
+                    st.error("Please enter a valid phone number.")
+    else:
+        with st.form("otp_form"):
+            otp_code = st.text_input("Enter OTP", type="password")
+            submit = st.form_submit_button("Verify OTP")
+            if submit:
+                if login_user(st.session_state.phone_number, otp_code):
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT username FROM users WHERE phone_number = %s", (st.session_state.phone_number,))
+                    st.session_state.username = cursor.fetchone()[0]
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    st.session_state.authenticated = True
+                    st.session_state.selected_tab = "🏆 Resume Analysis"
+                    st.session_state.otp_sent = False
+                    st.rerun()
+                else:
+                    st.error("Invalid OTP or phone number not registered.")
 
 # Registration Page
 elif st.session_state.selected_tab == "Register" and not st.session_state.authenticated:
     st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Register for ResumeSmartX</h1>", unsafe_allow_html=True)
-    with st.form("register_form"):
-        username = st.text_input("Username")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        confirm_password = st.text_input("Confirm Password", type="password")
-        submit = st.form_submit_button("Register")
-        if submit:
-            if password != confirm_password:
-                st.error("Passwords do not match.")
-            elif len(username) < 3 or len(password) < 6:
-                st.error("Username must be at least 3 characters and password at least 6 characters.")
-            elif not email or '@' not in email:
-                st.error("Please enter a valid email address.")
-            else:
-                if register_user(username, password, email):
-                    st.success("Registration successful! Please log in.")
-                    st.session_state.selected_tab = "Login"
-                    st.rerun()
+    if not st.session_state.otp_sent:
+        with st.form("register_form"):
+            username = st.text_input("Username")
+            phone_number = st.text_input("Phone Number (e.g., +919876543210)")
+            submit = st.form_submit_button("Send OTP")
+            if submit:
+                if len(username) < 3:
+                    st.error("Username must be at least 3 characters.")
+                elif not phone_number or not phone_number.startswith("+") or len(phone_number) < 10:
+                    st.error("Please enter a valid phone number.")
+                else:
+                    if send_otp(phone_number):
+                        st.session_state.otp_sent = True
+                        st.session_state.phone_number = phone_number
+                        st.session_state.temp_username = username
+                        st.success("OTP sent to your phone number!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to send OTP. Please try again.")
+    else:
+        with st.form("otp_register_form"):
+            otp_code = st.text_input("Enter OTP", type="password")
+            submit = st.form_submit_button("Verify OTP")
+            if submit:
+                if verify_otp(st.session_state.phone_number, otp_code):
+                    if register_user(st.session_state.temp_username, st.session_state.phone_number):
+                        st.session_state.authenticated = True
+                        st.session_state.username = st.session_state.temp_username
+                        st.session_state.selected_tab = "🏆 Resume Analysis"
+                        st.session_state.otp_sent = False
+                        st.success("Registration successful! Logged in.")
+                        st.rerun()
+                else:
+                    st.error("Invalid OTP.")
 
 # Main App
 elif st.session_state.authenticated:
@@ -396,6 +613,7 @@ elif st.session_state.authenticated:
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.selected_tab = "Login"
+        st.session_state.otp_sent = False
         st.rerun()
 
     if st.session_state.selected_tab == "🏆 Resume Analysis":
@@ -403,11 +621,11 @@ elif st.session_state.authenticated:
             <h1 style='text-align: center; color: #4CAF50;'>MY PERSONAL ATS</h1>
             <hr style='border: 1px solid #4CAF50;'>
         """, unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 1])
         with col1:
             input_text = st.text_area("📋 Job Description:", key="input", height=150)
         with col2:
-            version_label = st.text_input("Resume Version Label (e.g., Software Engineer Role)", "Default Version")
+            version_label = st.text_input("Resume Version Label", "Default Version")
             uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
             if uploaded_file:
                 st.success("✅ PDF Uploaded Successfully.")
@@ -418,19 +636,7 @@ elif st.session_state.authenticated:
                         if page and page.extract_text():
                             resume_text += page.extract_text()
                     st.session_state['resume_text'] = resume_text
-                    resume_id = save_resume_to_postgres(uploaded_file.name, resume_text, version_label)
-                    if resume_id:
-                        conn = DB_POOL.getconn()
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT email FROM users WHERE username = %s", (st.session_state.username,))
-                        user_email = cursor.fetchone()[0]
-                        cursor.close()
-                        DB_POOL.putconn(conn)
-                        send_email(
-                            user_email,
-                            "Resume Uploaded Successfully",
-                            f"Your resume '{uploaded_file.name}' (Version: {version_label}) was uploaded on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
-                        )
+                    save_resume_to_postgres(uploaded_file.name, resume_text, version_label)
                 except Exception as e:
                     st.error(f"Failed to read PDF: {e}")
                     logger.error(f"Failed to read PDF: {e}")
@@ -454,15 +660,19 @@ elif st.session_state.authenticated:
                         with st.spinner("Generating audio..."):
                             try:
                                 short_text = response[:2000]
-                                audio = client.generate(
+                                audio_stream = client.generate(
                                     text=short_text,
                                     voice="Rachel",
-                                    model="eleven_multilingual_v2"
+                                    model="eleven_multilingual_v2",
+                                    stream=True
                                 )
+                                audio_chunks = []
+                                for chunk in audio_stream:
+                                    if chunk:
+                                        audio_chunks.append(chunk)
                                 with open("resume_summary.mp3", "wb") as f:
-                                    for chunk in audio:
-                                        if chunk:
-                                            f.write(chunk)
+                                    for chunk in audio_chunks:
+                                        f.write(chunk)
                                 st.success("Audio summary created!")
                                 st.audio("resume_summary.mp3")
                                 logger.info("Generated audio summary")
@@ -657,7 +867,7 @@ elif st.session_state.authenticated:
     elif st.session_state.selected_tab == "📊 DSA & Data Science":
         st.markdown("<h3 style='text-align: center;'>🛠 DSA for Data Science</h3>", unsafe_allow_html=True)
         level = st.selectbox("📚 Select Difficulty Level:", ["Beginner", "Intermediate", "Advanced"])
-        if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
+        if st.button(f"📝 Generate {level} DSA Questions"):
             with st.spinner("Generating..."):
                 response = get_gemini_response(
                     f"Generate 10 DSA questions and answers for data science at {level} level.",
@@ -703,7 +913,7 @@ elif st.session_state.authenticated:
                 st.write(response)
 
     elif st.session_state.selected_tab == "🛠️ Code Debugger":
-        st.markdown("<h3 style='text-align: center;'>🛠️ Python Code Debugger</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center;'>🛠 Python Code Debugger</h3>", unsafe_allow_html=True)
         user_code = st.text_area("Paste your Python code below:", height=300)
         if st.button("Check & Fix Code"):
             if not user_code.strip():
@@ -715,14 +925,10 @@ elif st.session_state.authenticated:
                         f"If it has issues, correct them. Return the fixed code and briefly explain the changes made.\n\n"
                         f"Code:\n```python\n{user_code}\n```"
                     )
-                    try:
-                        response = get_gemini_response(prompt, action="Code_Debugger")
-                        log_to_postgres("Code_Debugger", response)
-                        st.subheader("✅ Corrected Code")
-                        st.code(response, language="python")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        logger.error(f"Code Debugger error: {e}")
+                    response = get_gemini_response(prompt, action="Code_Debugger")
+                    log_to_postgres("Code_Debugger", response)
+                    st.subheader("✅ Corrected Code")
+                    st.code(response, language="python")
 
     elif st.session_state.selected_tab == "🤖 Voice Agent Chat":
         st.markdown("""
@@ -747,7 +953,7 @@ elif st.session_state.authenticated:
             user_id = cursor.fetchone()[0]
             cursor.execute("SELECT action, response, created_at FROM button_logs WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
             logs = cursor.fetchall()
-            cursor.execute("SELECT filename, version_label, uploaded_at FROM resumes WHERE user_id = %s ORDER BY uploaded_at DESC", (user_id,))
+            cursor.execute("SELECT filename, version_label, version_number, uploaded_at FROM resumes WHERE user_id = %s ORDER BY uploaded_at DESC", (user_id,))
             resumes = cursor.fetchall()
             cursor.close()
             DB_POOL.putconn(conn)
@@ -757,39 +963,113 @@ elif st.session_state.authenticated:
                 st.text_area("Response", log[1], height=100, disabled=True)
             st.subheader("Uploaded Resumes")
             for resume in resumes:
-                st.write(f"**{resume[2].strftime('%Y-%m-%d %H:%M:%S')}** - {resume[0]} (Version: {resume[1]})")
-            logger.info(f"Fetched history for user: {st.session_state.username}")
+                st.write(f"**{resume[3].strftime('%Y-%m-%d %H:%M:%S')}** - {resume[0]} (Version: {resume[1]}, #{resume[2]})")
+            if st.button("🔄 Revert to Previous Resume Version"):
+                resume_id = st.selectbox("Select Resume Version", [f"{r[0]} (Version #{r[2]})" for r in resumes])
+                if resume_id:
+                    selected_filename = resume_id.split(" (")[0]
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT resume_text FROM resumes WHERE filename = %s AND user_id = %s ORDER BY version_number DESC LIMIT 1", (selected_filename, user_id))
+                    st.session_state['resume_text'] = cursor.fetchone()[0]
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    st.success("Reverted to selected resume version!")
         except Exception as e:
             st.error(f"Failed to fetch history: {e}")
             logger.error(f"Failed to fetch history: {e}")
 
     elif st.session_state.selected_tab == "📊 Dashboard":
-        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📊 Your Dashboard</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📊 Your Career Dashboard</h2>", unsafe_allow_html=True)
         try:
             conn = DB_POOL.getconn()
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
             user_id = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM resumes WHERE user_id = %s", (user_id,))
+            cursor.execute("SELECT COUNT(DISTINCT filename) FROM resumes WHERE user_id = %s", (user_id,))
             resume_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM button_logs WHERE user_id = %s AND action LIKE '%%Gemini_API_Call%%'", (user_id,))
             api_calls = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM api_usage WHERE user_id = %s AND timestamp > %s",
+                (user_id, datetime.now() - timedelta(days=1))
+            )
+            daily_api_usage = cursor.fetchone()[0]
+            cursor.execute("SELECT goal, status FROM learning_goals WHERE user_id = %s", (user_id,))
+            goals = cursor.fetchall()
+            cursor.execute("SELECT job_title, company, description, apply_link, created_at FROM job_alerts WHERE user_id = %s ORDER BY created_at DESC LIMIT 5", (user_id,))
+            job_alerts = cursor.fetchall()
             cursor.close()
             DB_POOL.putconn(conn)
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("Resumes Uploaded", resume_count)
+                st.metric("Daily API Usage", f"{daily_api_usage}/50")
             with col2:
                 st.metric("API Calls Made", api_calls)
-            st.write("**Top Skills Identified** (from latest resume):")
+                st.metric("Learning Goals", len(goals))
+            if st.button("📊 Export Dashboard Data"):
+                data = {
+                    "Resumes Uploaded": [resume_count],
+                    "Total API Calls": [api_calls],
+                    "Daily API Usage": [daily_api_usage],
+                    "Learning Goals": [len(goals)]
+                }
+                df = pd.DataFrame(data)
+                csv = df.to_csv(index=False)
+                st.download_button("Download CSV", csv, "dashboard_data.csv", "text/csv")
+            st.subheader("Skill Gap Analysis")
             if resume_count > 0 and st.session_state.get('resume_text'):
                 response = get_gemini_response(
-                    f"Summarize the top 5 skills from the following resume text: {st.session_state['resume_text']}",
-                    action="Top_Skills_Summary"
+                    f"Analyze this resume against current data science job market trends and identify skill gaps:\n{st.session_state['resume_text']}",
+                    action="Skill_Gap_Analysis"
                 )
-                log_to_postgres("Top_Skills_Summary", response)
-                st.write(response)
-            logger.info(f"Fetched dashboard for user: {st.session_state.username}")
+                st.info(response)
+            st.subheader("Learning Goals")
+            for goal in goals:
+                st.write(f"- {goal[0]} (Status: {goal[1]})")
+            with st.form("add_goal_form"):
+                new_goal = st.text_input("Add New Learning Goal")
+                submit = st.form_submit_button("Add Goal")
+                if submit and new_goal:
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO learning_goals (user_id, goal) VALUES (%s, %s)", (user_id, new_goal))
+                    conn.commit()
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    st.success("Goal added!")
+                    st.rerun()
+            st.subheader("Job Alerts")
+            for alert in job_alerts:
+                st.write(f"**{alert[4].strftime('%Y-%m-%d')}** - {alert[0]} at {alert[1]}")
+                st.write(alert[2])
+                st.markdown(f"[Apply]({alert[3]})")
+            if st.button("🔎 Refresh Job Alerts"):
+                response = get_gemini_response(
+                    f"Based on this resume, suggest 5 data science job opportunities with titles, companies, descriptions, and apply links:\n{st.session_state['resume_text']}",
+                    action="Job_Alerts"
+                )
+                try:
+                    jobs = json.loads(response)
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    for job in jobs:
+                        cursor.execute(
+                            "INSERT INTO job_alerts (user_id, job_title, company, description, apply_link) VALUES (%s, %s, %s, %s, %s)",
+                            (user_id, job.get("title"), job.get("company"), job.get("description"), job.get("apply_link"))
+                        )
+                    conn.commit()
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    st.success("Job alerts updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to update job alerts: {e}")
+            st.subheader("Industry News")
+            st.write("Latest Data Science News (Mock RSS Feed):")
+            st.write("- [Towards Data Science: Top 5 ML Trends](https://towardsdatascience.com)")
+            st.write("- [KDnuggets: AI in 2025](https://www.kdnuggets.com)")
         except Exception as e:
             st.error(f"Failed to load dashboard: {e}")
             logger.error(f"Failed to load dashboard: {e}")
@@ -826,20 +1106,13 @@ elif st.session_state.authenticated:
                         INSERT INTO job_applications (user_id, company_name, job_role, application_date, resume_id, status)
                         VALUES (%s, %s, %s, %s, %s, %s)
                         """,
-                        (user_id, company_name, job_role, application_date, resume_id if resume_id is not None else None, status)
+                        (user_id, company_name, job_role, application_date, resume_id if resume_id else None, status)
                     )
                     conn.commit()
-                    cursor.execute("SELECT email FROM users WHERE username = %s", (st.session_state.username,))
-                    user_email = cursor.fetchone()[0]
                     cursor.close()
                     DB_POOL.putconn(conn)
-                    send_email(
-                        user_email,
-                        "Job Application Added",
-                        f"You added a job application for {job_role} at {company_name} on {application_date}. Status: {status}."
-                    )
                     st.success("Application added successfully!")
-                    logger.info(f"Added job application for {user_email}")
+                    logger.info(f"Added job application for user: {st.session_state.username}")
                 except Exception as e:
                     st.error(f"Failed to add application: {e}")
                     logger.error(f"Failed to add job application: {e}")
@@ -875,31 +1148,74 @@ elif st.session_state.authenticated:
             st.error(f"Failed to fetch applications: {e}")
             logger.error(f"Failed to fetch applications: {e}")
 
-    # Custom CSS
-    custom_css = """
-    <style>
-        .bottom-right {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            background-color: rgba(0, 0, 0, 0.7);
-            color: white;
-            padding: 10px 15px;
-            border-radius: 10px;
-            font-size: 14px;
-            font-family: Arial, sans-serif;
-            box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
-            transition: transform 0.3s ease-in-out;
-        }
-        .bottom-right:hover {
-            transform: scale(1.1);
-        }
-    </style>
-    <div class="bottom-right"><b>Built by AI Team</b></div>
-    """
-    st.markdown(custom_css, unsafe_allow_html=True)
+    elif st.session_state.selected_tab == "✍️ Resume Builder":
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>✍️ Resume Builder</h2>", unsafe_allow_html=True)
+        template = st.selectbox("Select Template", ["Chronological", "Functional"])
+        with st.form("resume_builder_form"):
+            personal_info = st.text_area("Personal Information (Name, Contact)", height=100)
+            education = st.text_area("Education", height=100)
+            experience = st.text_area("Work Experience", height=100)
+            skills = st.text_area("Skills", height=100)
+            version_label = st.text_input("Version Label", "Built Resume")
+            submit = st.form_submit_button("Generate Resume")
+            if submit:
+                resume_text = f"""
+                {personal_info}
+
+                Education
+                {education}
+
+                Work Experience
+                {experience}
+
+                Skills
+                {skills}
+                """
+                pdf_buffer = io.BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+                styles = getSampleStyleSheet()
+                story = []
+                if template == "Chronological":
+                    story.extend([
+                        Paragraph(personal_info.replace('\n', '<br/>'), styles['Title']),
+                        Spacer(1, 12),
+                        Paragraph("Education", styles['Heading2']),
+                        Paragraph(education.replace('\n', '<br/>'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Work Experience", styles['Heading2']),
+                        Paragraph(experience.replace('\n', '<br/>'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Skills", styles['Heading2']),
+                        Paragraph(skills.replace('\n', '<br/>'), styles['Normal'])
+                    ])
+                else:  # Functional
+                    story.extend([
+                        Paragraph(personal_info.replace('\n', '<br/>'), styles['Title']),
+                        Spacer(1, 12),
+                        Paragraph("Skills", styles['Heading2']),
+                        Paragraph(skills.replace('\n', '<br/>'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Work Experience", styles['Heading2']),
+                        Paragraph(experience.replace('\n', '<br/>'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Education", styles['Heading2']),
+                        Paragraph(education.replace('\n', '<br/>'), styles['Normal'])
+                    ])
+                doc.build(story)
+                st.session_state['resume_text'] = resume_text
+                resume_id = save_resume_to_postgres(f"resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", resume_text, version_label)
+                if resume_id:
+                    st.download_button(
+                        label="📥 Download Resume",
+                        data=pdf_buffer.getvalue(),
+                        file_name="generated_resume.pdf",
+                        mime="application/pdf"
+                    )
+                    st.success("Resume generated and saved!")
+                else:
+                    st.error("Failed to save resume.")
 
 else:
     st.error("Please log in to access the application.")
 
-logger.info("Streamlit app rendered successfully")
+logger.info("Application rendered successfully")
