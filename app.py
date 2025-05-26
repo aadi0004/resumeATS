@@ -1,11 +1,14 @@
-import tempfile
-import PyPDF2
-import docx2txt
-from dotenv import load_dotenv
-import streamlit as st
-import os
+import logging
 import io
-import base64
+import os
+import json
+import threading
+from datetime import datetime
+from typing import List, Optional, Union
+
+import bcrypt
+import csv
+import streamlit as st
 from PIL import Image
 import pdf2image
 import google.generativeai as genai
@@ -13,38 +16,65 @@ from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from datetime import datetime
-import json
 import streamlit.components.v1 as components
-import requests
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-import bcrypt
 from elevenlabs.client import ElevenLabs
-import smtplib
-from email.mime.text import MIMEText
-import csv
-import threading
+from dotenv import load_dotenv
+import smtplib  # Built-in
+from email.mime.text import MIMEText  # Built-in
+
+# Configure logging
+logging.basicConfig(
+    filename='app.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
 AGENT_ID = os.getenv("AGENT_ID")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# Configure Gemini API
+if GOOGLE_API_KEY:
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        logger.info("Google Gemini API configured successfully")
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini API: {e}")
+        st.error("Google API configuration failed. Please check your GOOGLE_API_KEY.")
+else:
+    logger.error("GOOGLE_API_KEY not found in environment variables")
+    st.error("Google API key not found. Please set GOOGLE_API_KEY in your .env file.")
 
 # Initialize ElevenLabs client
-client = ElevenLabs(api_key=ELEVEN_API_KEY)
+try:
+    client = ElevenLabs(api_key=ELEVEN_API_KEY)
+    logger.info("ElevenLabs client initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize ElevenLabs client: {e}")
+    st.error("ElevenLabs initialization failed. Please check your ELEVEN_API_KEY.")
 
 # Initialize database connection pool
-DB_POOL = SimpleConnectionPool(
-    1, 10,
-    host=os.getenv("PG_HOST"),
-    port=os.getenv("PG_PORT"),
-    user=os.getenv("PG_USER"),
-    password=os.getenv("PG_PASSWORD"),
-    dbname=os.getenv("PG_DB")
-)
+try:
+    DB_POOL = SimpleConnectionPool(
+        1, 10,
+        host=os.getenv("PG_HOST"),
+        port=os.getenv("PG_PORT"),
+        user=os.getenv("PG_USER"),
+        password=os.getenv("PG_PASSWORD"),
+        dbname=os.getenv("PG_DB")
+    )
+    logger.info("Database connection pool initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize database pool: {e}")
+    st.error(f"Database connection failed: {e}")
+    raise
 
-# -------------------- ✅ LOGGING SETUP START --------------------
+# -------------------- LOGGING SETUP --------------------
 csv_lock = threading.Lock()
 LOG_DIR = ".logs"
 LOG_FILE = os.path.join(LOG_DIR, "api_usage_logs.csv")
@@ -67,23 +97,25 @@ def get_current_total_tokens():
                     continue
     return total
 
-def log_api_usage(action, tokens_generated):
+def log_api_usage(action: str, tokens_generated: int):
     with csv_lock:
         current_total = get_current_total_tokens()
         new_total = current_total + tokens_generated
-        with open(LOG_FILE, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                datetime.now().isoformat(),
-                action,
-                1,
-                tokens_generated,
-                new_total
-            ])
+        try:
+            with open(LOG_FILE, "a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    datetime.now().isoformat(),
+                    action,
+                    1,
+                    tokens_generated,
+                    new_total
+                ])
+            logger.info(f"Logged API usage: {action}, tokens: {tokens_generated}")
+        except Exception as e:
+            logger.error(f"Failed to log API usage: {e}")
 
-# -------------------- ✅ LOGGING SETUP END --------------------
-
-# -------------------- ✅ DATABASE FUNCTIONS --------------------
+# -------------------- DATABASE FUNCTIONS --------------------
 def init_db():
     conn = DB_POOL.getconn()
     try:
@@ -139,12 +171,14 @@ def init_db():
         """)
         conn.commit()
         cursor.close()
+        logger.info("Database tables initialized successfully")
     except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
         st.error(f"Database initialization failed: {e}")
     finally:
         DB_POOL.putconn(conn)
 
-def register_user(username, password, email):
+def register_user(username: str, password: str, email: str) -> bool:
     conn = DB_POOL.getconn()
     try:
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -152,17 +186,20 @@ def register_user(username, password, email):
         cursor.execute("INSERT INTO users (username, password, email) VALUES (%s, %s, %s)", (username, hashed_password, email))
         conn.commit()
         cursor.close()
+        logger.info(f"User registered: {username}")
         return True
     except psycopg2.IntegrityError:
         st.error("Username already exists. Please choose a different username.")
+        logger.warning(f"Registration failed for {username}: Username exists")
         return False
     except Exception as e:
         st.error(f"Registration failed: {e}")
+        logger.error(f"Registration failed for {username}: {e}")
         return False
     finally:
         DB_POOL.putconn(conn)
 
-def login_user(username, password):
+def login_user(username: str, password: str) -> bool:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
@@ -170,17 +207,20 @@ def login_user(username, password):
         result = cursor.fetchone()
         cursor.close()
         if result and bcrypt.checkpw(password.encode('utf-8'), result[0].encode('utf-8')):
+            logger.info(f"User logged in: {username}")
             return True
         else:
             st.error("Invalid username or password.")
+            logger.warning(f"Login failed for {username}: Invalid credentials")
             return False
     except Exception as e:
         st.error(f"Login failed: {e}")
+        logger.error(f"Login failed for {username}: {e}")
         return False
     finally:
         DB_POOL.putconn(conn)
 
-def log_to_postgres(action, response):
+def log_to_postgres(action: str, response: str):
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
@@ -189,13 +229,15 @@ def log_to_postgres(action, response):
         if user_id:
             cursor.execute("INSERT INTO button_logs (action, response, user_id) VALUES (%s, %s, %s)", (action, response, user_id[0]))
             conn.commit()
+            logger.info(f"Logged action to Postgres: {action}")
         cursor.close()
     except Exception as e:
         st.error(f"PostgreSQL logging failed: {e}")
+        logger.error(f"PostgreSQL logging failed: {e}")
     finally:
         DB_POOL.putconn(conn)
 
-def save_resume_to_postgres(filename, resume_text, version_label):
+def save_resume_to_postgres(filename: str, resume_text: str, version_label: str) -> Union[int, None]:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
@@ -208,14 +250,20 @@ def save_resume_to_postgres(filename, resume_text, version_label):
         resume_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
+        logger.info(f"Saved resume to Postgres: {filename}, version: {version_label}")
         return resume_id
     except Exception as e:
-        st.error(f"❌ Failed to save resume to PostgreSQL: {e}")
+        st.error(f"Failed to save resume to PostgreSQL: {e}")
+        logger.error(f"Failed to save resume: {e}")
         return None
     finally:
         DB_POOL.putconn(conn)
 
-def send_email(to_email, subject, body):
+def send_email(to_email: str, subject: str, body: str) -> bool:
+    if not os.getenv("EMAIL_SENDER") or not os.getenv("EMAIL_PASSWORD"):
+        st.error("Email configuration missing. Please set EMAIL_SENDER and EMAIL_PASSWORD in .env.")
+        logger.error("Email configuration missing in .env")
+        return False
     msg = MIMEText(body)
     msg['Subject'] = subject
     msg['From'] = os.getenv("EMAIL_SENDER")
@@ -225,14 +273,21 @@ def send_email(to_email, subject, body):
             server.starttls()
             server.login(os.getenv("EMAIL_SENDER"), os.getenv("EMAIL_PASSWORD"))
             server.sendmail(os.getenv("EMAIL_SENDER"), to_email, msg.as_string())
+        logger.info(f"Email sent to {to_email}: {subject}")
         return True
+    except smtplib.SMTPAuthenticationError:
+        st.error("Email authentication failed. Please check your EMAIL_SENDER and EMAIL_PASSWORD.")
+        logger.error(f"SMTP authentication failed for {os.getenv('EMAIL_SENDER')}")
+        return False
     except Exception as e:
         st.error(f"Failed to send email: {e}")
+        logger.error(f"Failed to send email to {to_email}: {e}")
         return False
 
-# -------------------- ✅ Gemini API Wrapper --------------------
-def get_gemini_response(prompt, action="Gemini_API_Call"):
+# -------------------- Gemini API Wrapper --------------------
+def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
     if not prompt.strip():
+        logger.warning("Empty prompt provided to Gemini API")
         return "Error: Prompt is empty. Please provide a valid prompt."
     conn = DB_POOL.getconn()
     try:
@@ -242,6 +297,7 @@ def get_gemini_response(prompt, action="Gemini_API_Call"):
         if cached:
             cursor.close()
             DB_POOL.putconn(conn)
+            logger.info(f"Retrieved cached Gemini response for action: {action}")
             return cached[0]
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content([prompt, f"Add randomness: {os.urandom(8).hex()}"])
@@ -252,22 +308,25 @@ def get_gemini_response(prompt, action="Gemini_API_Call"):
             conn.commit()
             cursor.close()
             DB_POOL.putconn(conn)
+            logger.info(f"Generated and cached Gemini response for action: {action}")
             return response.text
         else:
             cursor.close()
             DB_POOL.putconn(conn)
+            logger.warning("No valid response from Gemini API")
             return "Error: No valid response received from Gemini API."
     except Exception as e:
         if 'cursor' in locals():
             cursor.close()
         DB_POOL.putconn(conn)
         log_api_usage(f"{action}_Error", 0)
+        logger.error(f"Gemini API error: {e}")
         return f"API Error: {str(e)}"
 
-# -------------------- ✅ Initialize Database --------------------
+# -------------------- Initialize Database --------------------
 init_db()
 
-# -------------------- ✅ Streamlit App --------------------
+# -------------------- Streamlit App --------------------
 st.set_page_config(page_title="ResumeSmartX - AI ATS", page_icon="📄", layout='wide')
 
 # Initialize session state
@@ -279,14 +338,17 @@ if 'selected_tab' not in st.session_state:
     st.session_state.selected_tab = "Login"
 
 # Sidebar Navigation
-st.sidebar.image("logo.png", width=200)
+try:
+    st.sidebar.image("logo.png", width=200)
+except FileNotFoundError:
+    st.sidebar.warning("logo.png not found. Please add it to the project directory.")
 st.sidebar.title("Navigation")
 
 if not st.session_state.authenticated:
     st.session_state.selected_tab = st.sidebar.radio("Choose an Option", ["Login", "Register"])
 else:
     st.session_state.selected_tab = st.sidebar.radio("Choose a Feature", [
-        "🏆 Resume Analysis", "📚 Question Bank", "📊 DSA & Data Science", "🔝Top 3 MNCs", 
+        "🏆 Resume Analysis", "📚 Question Bank", "📊 DSA & Data Science", "🔝 Top 3 MNCs",
         "🛠️ Code Debugger", "🤖 Voice Agent Chat", "📜 History", "📊 Dashboard", "📋 Job Tracker"
     ])
 
@@ -344,8 +406,6 @@ elif st.session_state.authenticated:
         col1, col2 = st.columns(2)
         with col1:
             input_text = st.text_area("📋 Job Description:", key="input", height=150)
-        uploaded_file = None
-        resume_text = ""
         with col2:
             version_label = st.text_input("Resume Version Label (e.g., Software Engineer Role)", "Default Version")
             uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
@@ -369,60 +429,68 @@ elif st.session_state.authenticated:
                         send_email(
                             user_email,
                             "Resume Uploaded Successfully",
-                            f"Your resume '{uploaded_file.name}' (Version: {version_label}) was uploaded successfully on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+                            f"Your resume '{uploaded_file.name}' (Version: {version_label}) was uploaded on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
                         )
                 except Exception as e:
-                    st.error(f"❌ Failed to read PDF: {str(e)}")
+                    st.error(f"Failed to read PDF: {e}")
+                    logger.error(f"Failed to read PDF: {e}")
         st.markdown("---")
         st.markdown("<h3 style='text-align: center;'>🛠 Quick Actions</h3>", unsafe_allow_html=True)
-        response_container = st.container()
 
         if st.button("📖 Tell Me About the Resume"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
-                    prompt_text = f"Please review the following resume and provide a detailed evaluation: {resume_text}"
-                    response = get_gemini_response(prompt_text, action="Tell_me_about_resume")
+            with st.spinner("Analyzing..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume first.")
+                else:
+                    response = get_gemini_response(
+                        f"Please review the following resume and provide a detailed evaluation: {st.session_state['resume_text']}",
+                        action="Tell_me_about_resume"
+                    )
                     log_to_postgres("Tell_me_about_resume", response)
                     st.session_state['resume_response'] = response
                     st.write(response)
                     st.download_button("💾 Download Resume Evaluation", response, "resume_evaluation.txt")
                     if st.button("🔊 Read Resume Summary"):
-                        with st.spinner("🎤 Generating audio..."):
+                        with st.spinner("Generating audio..."):
                             try:
                                 short_text = response[:2000]
                                 audio = client.generate(
                                     text=short_text,
                                     voice="Rachel",
-                                    model="eleven_multilingual-v2"
+                                    model="eleven_multilingual_v2"
                                 )
                                 with open("resume_summary.mp3", "wb") as f:
-                                    f.write(audio)
-                                st.success("✅ Audio summary ready!")
+                                    for chunk in audio:
+                                        if chunk:
+                                            f.write(chunk)
+                                st.success("Audio summary created!")
                                 st.audio("resume_summary.mp3")
+                                logger.info("Generated audio summary")
                             except Exception as e:
-                                st.error(f"❌ Error generating audio: {str(e)}")
-                else:
-                    st.warning("⚠ Please upload a resume first.")
+                                st.error(f"Audio generation failed: {e}")
+                                logger.error(f"Failed to generate audio: {e}")
 
         if st.button("📊 Percentage Match"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text and input_text:
+            with st.spinner("Analyzing..."):
+                if not st.session_state.get('resume_text') or not input_text:
+                    st.warning("Please upload a resume and provide a job description.")
+                else:
                     response = get_gemini_response(
-                        f"Evaluate the following resume against this job description and provide a percentage match in first :\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                        f"Evaluate the following resume against this job description and provide a percentage match first:\n\nJob Description:\n{input_text}\n\nResume:\n{st.session_state['resume_text']}",
                         action="Percentage_Match"
                     )
                     log_to_postgres("Percentage_Match", response)
                     st.write(response)
                     st.download_button("💾 Download Percentage Match", response, "percentage_match.txt")
-                else:
-                    st.warning("⚠ Please upload a resume and provide a job description.")
 
         learning_path_duration = st.selectbox("📆 Select Personalized Learning Path Duration:", ["3 Months", "6 Months", "9 Months", "12 Months"])
         if st.button("🎓 Personalized Learning Path"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text and input_text and learning_path_duration:
+            with st.spinner("Generating..."):
+                if not st.session_state.get('resume_text') or not input_text:
+                    st.warning("Please upload a resume and provide a job description.")
+                else:
                     response = get_gemini_response(
-                        f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text} and also suggest books and other important thing",
+                        f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\nJob Description:\n{input_text}\n\nResume:\n{st.session_state['resume_text']} and also suggest books and other important things",
                         action="Personalized_Learning_Path"
                     )
                     log_to_postgres("Personalized_Learning_Path", response)
@@ -437,80 +505,78 @@ elif st.session_state.authenticated:
                         story.append(Spacer(1, 12))
                     doc.build(story)
                     st.download_button(
-                        f"💾 Download Learning Path PDF", 
-                        pdf_buffer.getvalue(), 
-                        f"learning_path_{learning_path_duration.replace(' ', '_').lower()}.pdf", 
+                        f"💾 Download Learning Path PDF",
+                        pdf_buffer.getvalue(),
+                        f"learning_path_{learning_path_duration.replace(' ', '_').lower()}.pdf",
                         "application/pdf"
                     )
-                else:
-                    st.warning("⚠ Please upload a resume and provide a job description.")
 
         if st.button("📝 Generate Updated Resume"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
+            with st.spinner("Generating..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume first.")
+                else:
                     response = get_gemini_response(
-                        f"Suggest improvements and generate an updated resume for this candidate according to job description, not more than 2 pages:\n{resume_text}",
+                        f"Suggest improvements and generate an updated resume for this candidate according to the job description, not more than 2 pages:\n{st.session_state['resume_text']}",
                         action="Generate_Updated_Resume"
                     )
                     log_to_postgres("Generate_Updated_Resume", response)
                     st.write(response)
-                    pdf_file = "updated_resume.pdf"
-                    doc = SimpleDocTemplate(pdf_file, pagesize=letter)
+                    pdf_buffer = io.BytesIO()
+                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
                     styles = getSampleStyleSheet()
                     story = [Paragraph(response.replace('\n', '<br/>'), styles['Normal'])]
                     doc.build(story)
-                    with open(pdf_file, "rb") as f:
-                        pdf_data = f.read()
                     st.download_button(
-                        label="📥 Download Updated Resume", 
-                        data=pdf_data, 
-                        file_name="Updated_Resume.pdf", 
+                        label="📥 Download Updated Resume",
+                        data=pdf_buffer.getvalue(),
+                        file_name="Updated_Resume.pdf",
                         mime="application/pdf"
                     )
-                else:
-                    st.warning("⚠ Please upload a resume first.")
 
         if st.button("❓ Generate 30 Interview Questions and Answers"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text:
+            with st.spinner("Generating..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume first.")
+                else:
                     response = get_gemini_response(
-                        "Generate 30 technical interview questions and their detailed answers according to that job description.",
+                        f"Generate 30 technical interview questions and their detailed answers based on the resume:\n{st.session_state['resume_text']}",
                         action="Generate_Interview_Questions"
                     )
                     log_to_postgres("Generate_Interview_Questions", response)
                     st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
 
-        if st.button("🚀 Skill Development Plan"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text and input_text:
+        if st.button("🚖 Skill Development Plan"):
+            with st.spinner("Generating..."):
+                if not st.session_state.get('resume_text') or not input_text:
+                    st.warning("Please upload a resume and provide a job description.")
+                else:
                     response = get_gemini_response(
-                        f"Based on the resume and job description, suggest courses, books, and projects to improve the candidate's weak or missing skills.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                        f"Based on the resume and job description, suggest courses, books, and projects to improve the person's weak or missing skills.\n\nJob Description:\n{input_text}\n\nResume:\n{st.session_state['resume_text']}",
                         action="Skill_Development_Plan"
                     )
                     log_to_postgres("Skill_Development_Plan", response)
                     st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
 
         if st.button("🎥 Mock Interview Questions"):
-            with st.spinner("⏳ Loading... Please wait"):
-                if resume_text and input_text:
+            with st.spinner("Generating..."):
+                if not st.session_state.get('resume_text') or not input_text:
+                    st.warning("Please upload a resume and provide a job description.")
+                else:
                     response = get_gemini_response(
-                        f"Generate follow-up interview questions based on the resume and job description, simulating a live interview.\n\nJob Description:\n{input_text}\n\nResume:\n{resume_text}",
+                        f"Generate follow-up interview questions based on the resume and job description, simulating a live interview.\n\nJob Description:\n{input_text}\n\nResume:\n{st.session_state['resume_text']}",
                         action="Mock_Interview_Questions"
                     )
                     log_to_postgres("Mock_Interview_Questions", response)
                     st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
 
-        if st.button("💡 AI-Driven Insights"):
-            with st.spinner("🔍 Analyzing... Please wait"):
-                if resume_text:
+        if st.button("💡 AI Insights"):
+            with st.spinner("Analyzing..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume first.")
+                else:
                     response = get_gemini_response(
-                        f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}",
+                        f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{st.session_state['resume_text']}",
                         action="AI_Driven_Insights"
                     )
                     log_to_postgres("AI_Driven_Insights", response)
@@ -523,18 +589,16 @@ elif st.session_state.authenticated:
                     except json.JSONDecodeError:
                         st.write("📋 AI-Driven Insights:")
                         st.write(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
 
-    elif st.session_state.selected_tab == "🔝Top 3 MNCs":
+    elif st.session_state.selected_tab == "🔝 Top 3 MNCs":
         st.markdown("---")
-        st.markdown("<h2 style='text-align: center; color:#FFA500;'>🚀 MNC Data Science Preparation</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>🚀 MNC Data Science Preparation</h2>", unsafe_allow_html=True)
         st.markdown("---")
         if "selected_mnc" not in st.session_state:
             st.session_state["selected_mnc"] = None
         mnc_data = [
             {"name": "TCS", "color": "#FFA500", "icon": "🎯"},
-            {"name": "Infosys", "color": "#03A9F4", "icon": "🚀"},
+            {"name": "Infosys", "color": "#03A9F4", "icon": "🚖"},
             {"name": "Wipro", "color": "#9C27B0", "icon": "🔍"},
         ]
         col1, col2, col3 = st.columns(3)
@@ -546,59 +610,55 @@ elif st.session_state.authenticated:
             selected_mnc = st.session_state["selected_mnc"]
             st.markdown(f"<h3 style='color: #FFA500; text-align: center;'>{selected_mnc} Data Science Preparation</h3>", unsafe_allow_html=True)
             st.markdown("---")
-            with st.spinner("⏳ Analyzing your resume... Please wait"):
-                if "resume_text" in st.session_state and st.session_state["resume_text"]:
-                    resume_text = st.session_state["resume_text"]
+            with st.spinner("Analyzing..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume first.")
+                else:
                     response = get_gemini_response(
                         f"Based on the candidate's qualifications and resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?",
                         action="Additional_Skills_MNCS"
                     )
                     log_to_postgres("Additional_Skills_MNCS", response)
                     st.info(response)
-                else:
-                    st.warning("⚠ Please upload a resume first.")
             if st.button("📂 Project Types & Required Skills"):
-                with st.spinner("⏳ Loading... Please wait"):
-                    if "resume_text" in st.session_state and st.session_state["resume_text"]:
-                        resume_text = st.session_state["resume_text"]
+                with st.spinner("Loading..."):
+                    if not st.session_state.get('resume_text'):
+                        st.warning("Please upload a resume first.")
+                    else:
                         response = get_gemini_response(
                             f"What types of Data Science projects does {selected_mnc} typically work on, and what skills align best?",
                             action="Project_Types_Skills"
                         )
                         log_to_postgres("Project_Types_Skills", response)
                         st.success(response)
-                    else:
-                        st.warning("⚠ Please upload a resume first.")
             if st.button("🛠 Required Skills"):
-                with st.spinner("⏳ Loading... Please wait"):
-                    if "resume_text" in st.session_state and st.session_state["resume_text"]:
-                        resume_text = st.session_state["resume_text"]
+                with st.spinner("Loading..."):
+                    if not st.session_state.get('resume_text'):
+                        st.warning("Please upload a resume first.")
+                    else:
                         response = get_gemini_response(
                             f"What key technical and soft skills are needed for a Data Science role at {selected_mnc}?",
                             action="Required_Skills"
                         )
                         log_to_postgres("Required_Skills", response)
                         st.success(response)
-                    else:
-                        st.warning("⚠ Please upload a resume first.")
             if st.button("💡 Career Recommendations"):
-                with st.spinner("⏳ Loading... Please wait"):
-                    if "resume_text" in st.session_state and st.session_state["resume_text"]:
-                        resume_text = st.session_state["resume_text"]
+                with st.spinner("Loading..."):
+                    if not st.session_state.get('resume_text'):
+                        st.warning("Please upload a resume first.")
+                    else:
                         response = get_gemini_response(
                             f"Based on the candidate's resume, what specific areas should they focus on to strengthen their chances of getting a Data Science role at {selected_mnc}?",
                             action="Career_Recommendations"
                         )
                         log_to_postgres("Career_Recommendations", response)
                         st.success(response)
-                    else:
-                        st.warning("⚠ Please upload a resume first.")
 
     elif st.session_state.selected_tab == "📊 DSA & Data Science":
         st.markdown("<h3 style='text-align: center;'>🛠 DSA for Data Science</h3>", unsafe_allow_html=True)
-        level = st.selectbox("📚 Select Difficulty Level:", ["Easy", "Intermediate", "Advanced"])
+        level = st.selectbox("📚 Select Difficulty Level:", ["Beginner", "Intermediate", "Advanced"])
         if st.button(f"📝 Generate {level} DSA Questions (Data Science)"):
-            with st.spinner("⏳ Loading... Please wait"):
+            with st.spinner("Generating..."):
                 response = get_gemini_response(
                     f"Generate 10 DSA questions and answers for data science at {level} level.",
                     action="DSA_Questions"
@@ -606,19 +666,20 @@ elif st.session_state.authenticated:
                 log_to_postgres("DSA_Questions", response)
                 st.write(response)
         topic = st.selectbox("🗂 Select DSA Topic:", [
-            "Arrays", "Linked Lists", "Trees", "Graphs", "Dynamic Programming", 
-            "Recursion", "algorithm complexity (Big O notation)", "sorting", "searching"
+            "Arrays", "Linked Lists", "Trees", "Graphs",
+            "Dynamic Programming", "Recursion",
+            "Algorithm Complexity (Big O Notation)", "Sorting", "Searching"
         ])
         if st.button(f"📖 Teach me {topic} with Case Studies"):
-            with st.spinner("⏳ Gathering resources... Please wait"):
+            with st.spinner("Gathering resources..."):
                 explanation_response = get_gemini_response(
-                    f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples add all details like defination exampales of {topic} and code implementation in python with full explaination of that code.",
+                    f"Explain the {topic} topic in an easy-to-understand way suitable for beginners, using simple language and clear examples. Add details like definition, examples of {topic}, and code implementation in Python with full explanation of the code.",
                     action="Teach_me_DSA_Topics"
                 )
                 log_to_postgres("Teach_me_DSA_Topics", explanation_response)
                 st.write(explanation_response)
                 case_study_response = get_gemini_response(
-                    f"Provide a real-world case study on {topic} for data science/ data engineer/ m.l/ai with a detailed, easy-to-understand solution.",
+                    f"Provide a real-world case study on {topic} for data science/data engineering/ML/AI with a detailed, easy-to-understand solution.",
                     action="Case_Study_DSA_Topics"
                 )
                 log_to_postgres("Case_Study_DSA_Topics", case_study_response)
@@ -626,16 +687,16 @@ elif st.session_state.authenticated:
 
     elif st.session_state.selected_tab == "📚 Question Bank":
         st.markdown("---")
-        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📚 Question Bank</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📖 Question Bank</h2>", unsafe_allow_html=True)
         st.markdown("---")
         question_category = st.selectbox("❓ Select Question Category:", [
-            "Python", "Machine Learning", "Deep Learning", "Docker", 
+            "Python", "Machine Learning", "Deep Learning", "Docker",
             "Data Warehousing", "Data Pipelines", "Data Modeling", "SQL"
         ])
-        if st.button(f"📝 Generate 30 {question_category} Interview Questions"):
-            with st.spinner("⏳ Loading... Please wait"):
+        if st.button(f"📖 Generate 30 {question_category} Interview Questions"):
+            with st.spinner("Loading..."):
                 response = get_gemini_response(
-                    f"Generate 30 {question_category} interview questions and detailed answers",
+                    f"Generate 30 {question_category} interview questions and detailed answers.",
                     action="Interview_Questions"
                 )
                 log_to_postgres("Interview_Questions", response)
@@ -645,18 +706,15 @@ elif st.session_state.authenticated:
         st.markdown("<h3 style='text-align: center;'>🛠️ Python Code Debugger</h3>", unsafe_allow_html=True)
         user_code = st.text_area("Paste your Python code below:", height=300)
         if st.button("Check & Fix Code"):
-            if user_code.strip() == "":
+            if not user_code.strip():
                 st.warning("Please enter some code.")
             else:
                 with st.spinner("Analyzing and fixing code..."):
-                    prompt = f"""
-                    Analyze the following Python code for bugs, syntax errors, and logic errors.
-                    If it has issues, correct them. Return the fixed code and briefly explain the changes made.
-                    Code:
-                    ```python
-                    {user_code}
-                    ```
-                    """
+                    prompt = (
+                        f"Analyze the following Python code for bugs, syntax errors, and logic errors.\n"
+                        f"If it has issues, correct them. Return the fixed code and briefly explain the changes made.\n\n"
+                        f"Code:\n```python\n{user_code}\n```"
+                    )
                     try:
                         response = get_gemini_response(prompt, action="Code_Debugger")
                         log_to_postgres("Code_Debugger", response)
@@ -664,23 +722,24 @@ elif st.session_state.authenticated:
                         st.code(response, language="python")
                     except Exception as e:
                         st.error(f"Error: {e}")
+                        logger.error(f"Code Debugger error: {e}")
 
     elif st.session_state.selected_tab == "🤖 Voice Agent Chat":
         st.markdown("""
             <h1 style='text-align: center; color: #4CAF50;'>Talk to AI Interviewer 🤖🎤</h1>
             <hr style='border: 1px solid #4CAF50;'>
             <p style='text-align: center;'>Start a real-time voice conversation with our AI agent powered by ElevenLabs.</p>
-            <div style='text-align: center; margin-bottom: 30px;'>
-                <a href='https://elevenlabs.io/app/talk-to?agent_id=ybbzwh5ejKaruGyPH3pg' target='_blank'>
+            <div style='text-align: center;'>
+                <a href='https://elevenlabs.io/app/talk-to?agent_id={AGENT_ID}' target='_blank'>
                     <button style='padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer;'>
-                        🚀 Launch Voice Interview Agent
+                        🚖 Launch Voice Interview Agent
                     </button>
                 </a>
             </div>
         """, unsafe_allow_html=True)
 
     elif st.session_state.selected_tab == "📜 History":
-        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📜 Your Activity History</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📜 Your Activity History</h2>", unsafe_allow_html=True)
         try:
             conn = DB_POOL.getconn()
             cursor = conn.cursor()
@@ -699,11 +758,13 @@ elif st.session_state.authenticated:
             st.subheader("Uploaded Resumes")
             for resume in resumes:
                 st.write(f"**{resume[2].strftime('%Y-%m-%d %H:%M:%S')}** - {resume[0]} (Version: {resume[1]})")
+            logger.info(f"Fetched history for user: {st.session_state.username}")
         except Exception as e:
             st.error(f"Failed to fetch history: {e}")
+            logger.error(f"Failed to fetch history: {e}")
 
     elif st.session_state.selected_tab == "📊 Dashboard":
-        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📊 Your Dashboard</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📊 Your Dashboard</h2>", unsafe_allow_html=True)
         try:
             conn = DB_POOL.getconn()
             cursor = conn.cursor()
@@ -721,18 +782,20 @@ elif st.session_state.authenticated:
             with col2:
                 st.metric("API Calls Made", api_calls)
             st.write("**Top Skills Identified** (from latest resume):")
-            if resume_count > 0:
+            if resume_count > 0 and st.session_state.get('resume_text'):
                 response = get_gemini_response(
-                    f"Summarize the top 5 skills from the following resume text: {st.session_state.get('resume_text', '')}",
+                    f"Summarize the top 5 skills from the following resume text: {st.session_state['resume_text']}",
                     action="Top_Skills_Summary"
                 )
                 log_to_postgres("Top_Skills_Summary", response)
                 st.write(response)
+            logger.info(f"Fetched dashboard for user: {st.session_state.username}")
         except Exception as e:
             st.error(f"Failed to load dashboard: {e}")
+            logger.error(f"Failed to load dashboard: {e}")
 
     elif st.session_state.selected_tab == "📋 Job Tracker":
-        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📋 Job Application Tracker</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FFA500;'>📋 Job Application Tracker</h2>", unsafe_allow_html=True)
         with st.form("job_tracker_form"):
             company_name = st.text_input("Company Name")
             job_role = st.text_input("Job Role")
@@ -751,20 +814,21 @@ elif st.session_state.authenticated:
                 DB_POOL.putconn(conn)
             except Exception as e:
                 st.error(f"Failed to fetch resumes: {e}")
+                logger.error(f"Failed to fetch resumes: {e}")
             resume_id = st.selectbox("Select Resume", options=[r[0] for r in resume_options], format_func=lambda x: next((r[1] for r in resume_options if r[0] == x), "None"))
-            submit = st.form_submit_button("Add Application")
+            submit = st.form_submit_button("Submit")
             if submit:
                 try:
                     conn = DB_POOL.getconn()
                     cursor = conn.cursor()
                     cursor.execute(
-                        "INSERT INTO job_applications (user_id, company_name, job_role, application_date, resume_id, status) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (user_id, company_name, job_role, application_date, resume_id if resume_id != "None" else None, status)
+                        """
+                        INSERT INTO job_applications (user_id, company_name, job_role, application_date, resume_id, status)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (user_id, company_name, job_role, application_date, resume_id if resume_id is not None else None, status)
                     )
                     conn.commit()
-                    cursor.close()
-                    DB_POOL.putconn(conn)
-                    cursor = conn.cursor()
                     cursor.execute("SELECT email FROM users WHERE username = %s", (st.session_state.username,))
                     user_email = cursor.fetchone()[0]
                     cursor.close()
@@ -775,15 +839,22 @@ elif st.session_state.authenticated:
                         f"You added a job application for {job_role} at {company_name} on {application_date}. Status: {status}."
                     )
                     st.success("Application added successfully!")
+                    logger.info(f"Added job application for {user_email}")
                 except Exception as e:
                     st.error(f"Failed to add application: {e}")
+                    logger.error(f"Failed to add job application: {e}")
         st.subheader("Your Applications")
         try:
             conn = DB_POOL.getconn()
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
             user_id = cursor.fetchone()[0]
-            cursor.execute("SELECT company_name, job_role, application_date, status, resume_id FROM job_applications WHERE user_id = %s ORDER BY application_date DESC", (user_id,))
+            cursor.execute("""
+                SELECT company_name, job_role, application_date, status, resume_id
+                FROM job_applications
+                WHERE user_id = %s
+                ORDER BY application_date DESC
+            """, (user_id,))
             apps = cursor.fetchall()
             cursor.close()
             DB_POOL.putconn(conn)
@@ -799,8 +870,10 @@ elif st.session_state.authenticated:
                     cursor.close()
                     DB_POOL.putconn(conn)
                 st.write(f"**{app[2]}** - {app[0]} ({app[1]}) - Status: {app[3]} - Resume: {resume_label}")
+            logger.info(f"Fetched job applications for user: {st.session_state.username}")
         except Exception as e:
             st.error(f"Failed to fetch applications: {e}")
+            logger.error(f"Failed to fetch applications: {e}")
 
     # Custom CSS
     custom_css = """
@@ -814,16 +887,19 @@ elif st.session_state.authenticated:
             padding: 10px 15px;
             border-radius: 10px;
             font-size: 14px;
-            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.2);
+            font-family: Arial, sans-serif;
+            box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
             transition: transform 0.3s ease-in-out;
         }
         .bottom-right:hover {
             transform: scale(1.1);
         }
     </style>
-    <div class="bottom-right"> <b>Built by AI Team of Regex Software </b></div>
+    <div class="bottom-right"><b>Built by AI Team</b></div>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
 else:
     st.error("Please log in to access the application.")
+
+logger.info("Streamlit app rendered successfully")

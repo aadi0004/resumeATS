@@ -1,23 +1,13 @@
-# streamlit 
-# PyPDF2
-# google-generativeai 
-# python-dotenv 
-# pdf2image 
-# reportlab
-# # deepface 
-# openai-whisper 
-# transformers 
-# # moviepy
-# youtube-transcript-api
-# elevenlabs
-# docx2txt
-# fpdf
-# # requests
-# # speechrecognition
-# # streamlit-mic-recorder
-# # pydub
-# # librosa
-# # numpy
+streamlit
+PyPDF2
+python-docx
+python-dotenv
+pdf2image
+google-generativeai
+reportlab
+psycopg2-binary
+bcrypt
+elevenlabs
 
 
 
