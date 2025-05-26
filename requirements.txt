@@ -43,3 +43,5 @@ docx2txt
 fpdf
 psycopg2-binary
 bcrypt
+smtplib
+email

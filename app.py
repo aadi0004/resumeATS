@@ -18,8 +18,13 @@ import json
 import streamlit.components.v1 as components
 import requests
 import psycopg2
+from psycopg2.pool import SimpleConnectionPool
 import bcrypt
 from elevenlabs.client import ElevenLabs
+import smtplib
+from email.mime.text import MIMEText
+import csv
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -29,10 +34,17 @@ AGENT_ID = os.getenv("AGENT_ID")
 # Initialize ElevenLabs client
 client = ElevenLabs(api_key=ELEVEN_API_KEY)
 
-# -------------------- ✅ LOGGING SETUP START --------------------
-import csv
-import threading
+# Initialize database connection pool
+DB_POOL = SimpleConnectionPool(
+    1, 10,
+    host=os.getenv("PG_HOST"),
+    port=os.getenv("PG_PORT"),
+    user=os.getenv("PG_USER"),
+    password=os.getenv("PG_PASSWORD"),
+    dbname=os.getenv("PG_DB")
+)
 
+# -------------------- ✅ LOGGING SETUP START --------------------
 csv_lock = threading.Lock()
 LOG_DIR = ".logs"
 LOG_FILE = os.path.join(LOG_DIR, "api_usage_logs.csv")
@@ -73,20 +85,15 @@ def log_api_usage(action, tokens_generated):
 
 # -------------------- ✅ DATABASE FUNCTIONS --------------------
 def init_db():
+    conn = DB_POOL.getconn()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD"),
-            dbname=os.getenv("PG_DB")
-        )
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
                 password TEXT NOT NULL,
+                email VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -95,6 +102,7 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 action VARCHAR(255),
                 response TEXT,
+                user_id INTEGER REFERENCES users(id),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -103,30 +111,47 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 filename VARCHAR(255),
                 resume_text TEXT,
+                user_id INTEGER REFERENCES users(id),
+                version_label VARCHAR(255),
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS job_applications (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                company_name VARCHAR(255),
+                job_role VARCHAR(255),
+                application_date DATE,
+                resume_id INTEGER REFERENCES resumes(id),
+                status VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_cache (
+                id SERIAL PRIMARY KEY,
+                action VARCHAR(255),
+                prompt TEXT,
+                response TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
         cursor.close()
-        conn.close()
     except Exception as e:
         st.error(f"Database initialization failed: {e}")
+    finally:
+        DB_POOL.putconn(conn)
 
-def register_user(username, password):
+def register_user(username, password, email):
+    conn = DB_POOL.getconn()
     try:
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD"),
-            dbname=os.getenv("PG_DB")
-        )
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
+        cursor.execute("INSERT INTO users (username, password, email) VALUES (%s, %s, %s)", (username, hashed_password, email))
         conn.commit()
         cursor.close()
-        conn.close()
         return True
     except psycopg2.IntegrityError:
         st.error("Username already exists. Please choose a different username.")
@@ -134,21 +159,16 @@ def register_user(username, password):
     except Exception as e:
         st.error(f"Registration failed: {e}")
         return False
+    finally:
+        DB_POOL.putconn(conn)
 
 def login_user(username, password):
+    conn = DB_POOL.getconn()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD"),
-            dbname=os.getenv("PG_DB")
-        )
         cursor = conn.cursor()
         cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
         result = cursor.fetchone()
         cursor.close()
-        conn.close()
         if result and bcrypt.checkpw(password.encode('utf-8'), result[0].encode('utf-8')):
             return True
         else:
@@ -157,58 +177,90 @@ def login_user(username, password):
     except Exception as e:
         st.error(f"Login failed: {e}")
         return False
+    finally:
+        DB_POOL.putconn(conn)
 
 def log_to_postgres(action, response):
+    conn = DB_POOL.getconn()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD"),
-            dbname=os.getenv("PG_DB")
-        )
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO button_logs (action, response) VALUES (%s, %s)", (action, response))
-        conn.commit()
+        cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+        user_id = cursor.fetchone()
+        if user_id:
+            cursor.execute("INSERT INTO button_logs (action, response, user_id) VALUES (%s, %s, %s)", (action, response, user_id[0]))
+            conn.commit()
         cursor.close()
-        conn.close()
     except Exception as e:
         st.error(f"PostgreSQL logging failed: {e}")
+    finally:
+        DB_POOL.putconn(conn)
 
-def save_resume_to_postgres(filename, resume_text):
+def save_resume_to_postgres(filename, resume_text, version_label):
+    conn = DB_POOL.getconn()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD"),
-            dbname=os.getenv("PG_DB")
-        )
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO resumes (filename, resume_text) VALUES (%s, %s)", (filename, resume_text))
+        cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+        user_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO resumes (filename, resume_text, user_id, version_label) VALUES (%s, %s, %s, %s) RETURNING id",
+            (filename, resume_text, user_id, version_label)
+        )
+        resume_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
-        conn.close()
+        return resume_id
     except Exception as e:
         st.error(f"❌ Failed to save resume to PostgreSQL: {e}")
+        return None
+    finally:
+        DB_POOL.putconn(conn)
+
+def send_email(to_email, subject, body):
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = os.getenv("EMAIL_SENDER")
+    msg['To'] = to_email
+    try:
+        with smtplib.SMTP(os.getenv("SMTP_SERVER"), os.getenv("SMTP_PORT")) as server:
+            server.starttls()
+            server.login(os.getenv("EMAIL_SENDER"), os.getenv("EMAIL_PASSWORD"))
+            server.sendmail(os.getenv("EMAIL_SENDER"), to_email, msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f"Failed to send email: {e}")
+        return False
 
 # -------------------- ✅ Gemini API Wrapper --------------------
 def get_gemini_response(prompt, action="Gemini_API_Call"):
     if not prompt.strip():
         return "Error: Prompt is empty. Please provide a valid prompt."
+    conn = DB_POOL.getconn()
     try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT response FROM api_cache WHERE action = %s AND prompt = %s", (action, prompt))
+        cached = cursor.fetchone()
+        if cached:
+            cursor.close()
+            DB_POOL.putconn(conn)
+            return cached[0]
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content([
-            prompt,
-            f"Add randomness: {os.urandom(8).hex()}"
-        ])
+        response = model.generate_content([prompt, f"Add randomness: {os.urandom(8).hex()}"])
         if hasattr(response, 'text') and response.text:
             token_count = len(prompt.split())
             log_api_usage(action, token_count)
+            cursor.execute("INSERT INTO api_cache (action, prompt, response) VALUES (%s, %s, %s)", (action, prompt, response.text))
+            conn.commit()
+            cursor.close()
+            DB_POOL.putconn(conn)
             return response.text
         else:
+            cursor.close()
+            DB_POOL.putconn(conn)
             return "Error: No valid response received from Gemini API."
     except Exception as e:
+        if 'cursor' in locals():
+            cursor.close()
+        DB_POOL.putconn(conn)
         log_api_usage(f"{action}_Error", 0)
         return f"API Error: {str(e)}"
 
@@ -235,7 +287,7 @@ if not st.session_state.authenticated:
 else:
     st.session_state.selected_tab = st.sidebar.radio("Choose a Feature", [
         "🏆 Resume Analysis", "📚 Question Bank", "📊 DSA & Data Science", "🔝Top 3 MNCs", 
-        "🛠️ Code Debugger", "🤖 Voice Agent Chat"
+        "🛠️ Code Debugger", "🤖 Voice Agent Chat", "📜 History", "📊 Dashboard", "📋 Job Tracker"
     ])
 
 # Login Page
@@ -258,6 +310,7 @@ elif st.session_state.selected_tab == "Register" and not st.session_state.authen
     st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Register for ResumeSmartX</h1>", unsafe_allow_html=True)
     with st.form("register_form"):
         username = st.text_input("Username")
+        email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         confirm_password = st.text_input("Confirm Password", type="password")
         submit = st.form_submit_button("Register")
@@ -266,8 +319,10 @@ elif st.session_state.selected_tab == "Register" and not st.session_state.authen
                 st.error("Passwords do not match.")
             elif len(username) < 3 or len(password) < 6:
                 st.error("Username must be at least 3 characters and password at least 6 characters.")
+            elif not email or '@' not in email:
+                st.error("Please enter a valid email address.")
             else:
-                if register_user(username, password):
+                if register_user(username, password, email):
                     st.success("Registration successful! Please log in.")
                     st.session_state.selected_tab = "Login"
                     st.rerun()
@@ -292,6 +347,7 @@ elif st.session_state.authenticated:
         uploaded_file = None
         resume_text = ""
         with col2:
+            version_label = st.text_input("Resume Version Label (e.g., Software Engineer Role)", "Default Version")
             uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
             if uploaded_file:
                 st.success("✅ PDF Uploaded Successfully.")
@@ -302,7 +358,19 @@ elif st.session_state.authenticated:
                         if page and page.extract_text():
                             resume_text += page.extract_text()
                     st.session_state['resume_text'] = resume_text
-                    save_resume_to_postgres(uploaded_file.name, resume_text)
+                    resume_id = save_resume_to_postgres(uploaded_file.name, resume_text, version_label)
+                    if resume_id:
+                        conn = DB_POOL.getconn()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT email FROM users WHERE username = %s", (st.session_state.username,))
+                        user_email = cursor.fetchone()[0]
+                        cursor.close()
+                        DB_POOL.putconn(conn)
+                        send_email(
+                            user_email,
+                            "Resume Uploaded Successfully",
+                            f"Your resume '{uploaded_file.name}' (Version: {version_label}) was uploaded successfully on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+                        )
                 except Exception as e:
                     st.error(f"❌ Failed to read PDF: {str(e)}")
         st.markdown("---")
@@ -441,20 +509,20 @@ elif st.session_state.authenticated:
         if st.button("💡 AI-Driven Insights"):
             with st.spinner("🔍 Analyzing... Please wait"):
                 if resume_text:
-                    recommendations = get_gemini_response(
+                    response = get_gemini_response(
                         f"Based on this resume, suggest specific job roles the user is most suited for and analyze market trends for their skills.\n\nResume:\n{resume_text}",
                         action="AI_Driven_Insights"
                     )
-                    log_to_postgres("AI_Driven_Insights", recommendations)
+                    log_to_postgres("AI_Driven_Insights", response)
                     try:
-                        recommendations = json.loads(recommendations)
+                        recommendations = json.loads(response)
                         st.write("📋 Smart Recommendations:")
                         st.write(recommendations.get("job_roles", "No recommendations found."))
                         st.write("📊 Market Trends:")
                         st.write(recommendations.get("market_trends", "No market trends available."))
                     except json.JSONDecodeError:
                         st.write("📋 AI-Driven Insights:")
-                        st.write(recommendations)
+                        st.write(response)
                 else:
                     st.warning("⚠ Please upload a resume first.")
 
@@ -590,14 +658,10 @@ elif st.session_state.authenticated:
                     ```
                     """
                     try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        response = model.generate_content([prompt])
-                        if response:
-                            st.subheader("✅ Corrected Code")
-                            st.code(response.text, language="python")
-                            log_to_postgres("Corrected Code", response.text)
-                        else:
-                            st.error("No response from Gemini.")
+                        response = get_gemini_response(prompt, action="Code_Debugger")
+                        log_to_postgres("Code_Debugger", response)
+                        st.subheader("✅ Corrected Code")
+                        st.code(response, language="python")
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -614,6 +678,129 @@ elif st.session_state.authenticated:
                 </a>
             </div>
         """, unsafe_allow_html=True)
+
+    elif st.session_state.selected_tab == "📜 History":
+        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📜 Your Activity History</h2>", unsafe_allow_html=True)
+        try:
+            conn = DB_POOL.getconn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+            user_id = cursor.fetchone()[0]
+            cursor.execute("SELECT action, response, created_at FROM button_logs WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
+            logs = cursor.fetchall()
+            cursor.execute("SELECT filename, version_label, uploaded_at FROM resumes WHERE user_id = %s ORDER BY uploaded_at DESC", (user_id,))
+            resumes = cursor.fetchall()
+            cursor.close()
+            DB_POOL.putconn(conn)
+            st.subheader("Past Actions")
+            for log in logs:
+                st.write(f"**{log[2].strftime('%Y-%m-%d %H:%M:%S')}** - {log[0]}")
+                st.text_area("Response", log[1], height=100, disabled=True)
+            st.subheader("Uploaded Resumes")
+            for resume in resumes:
+                st.write(f"**{resume[2].strftime('%Y-%m-%d %H:%M:%S')}** - {resume[0]} (Version: {resume[1]})")
+        except Exception as e:
+            st.error(f"Failed to fetch history: {e}")
+
+    elif st.session_state.selected_tab == "📊 Dashboard":
+        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📊 Your Dashboard</h2>", unsafe_allow_html=True)
+        try:
+            conn = DB_POOL.getconn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+            user_id = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM resumes WHERE user_id = %s", (user_id,))
+            resume_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM button_logs WHERE user_id = %s AND action LIKE '%%Gemini_API_Call%%'", (user_id,))
+            api_calls = cursor.fetchone()[0]
+            cursor.close()
+            DB_POOL.putconn(conn)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Resumes Uploaded", resume_count)
+            with col2:
+                st.metric("API Calls Made", api_calls)
+            st.write("**Top Skills Identified** (from latest resume):")
+            if resume_count > 0:
+                response = get_gemini_response(
+                    f"Summarize the top 5 skills from the following resume text: {st.session_state.get('resume_text', '')}",
+                    action="Top_Skills_Summary"
+                )
+                log_to_postgres("Top_Skills_Summary", response)
+                st.write(response)
+        except Exception as e:
+            st.error(f"Failed to load dashboard: {e}")
+
+    elif st.session_state.selected_tab == "📋 Job Tracker":
+        st.markdown("<h2 style='text-align: center; color:#FFA500;'>📋 Job Application Tracker</h2>", unsafe_allow_html=True)
+        with st.form("job_tracker_form"):
+            company_name = st.text_input("Company Name")
+            job_role = st.text_input("Job Role")
+            application_date = st.date_input("Application Date")
+            status = st.selectbox("Status", ["Applied", "Interviewing", "Offer", "Rejected"])
+            resume_options = [(None, "None")]
+            try:
+                conn = DB_POOL.getconn()
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+                user_id = cursor.fetchone()[0]
+                cursor.execute("SELECT id, version_label FROM resumes WHERE user_id = %s", (user_id,))
+                resumes = cursor.fetchall()
+                resume_options.extend([(r[0], r[1]) for r in resumes])
+                cursor.close()
+                DB_POOL.putconn(conn)
+            except Exception as e:
+                st.error(f"Failed to fetch resumes: {e}")
+            resume_id = st.selectbox("Select Resume", options=[r[0] for r in resume_options], format_func=lambda x: next((r[1] for r in resume_options if r[0] == x), "None"))
+            submit = st.form_submit_button("Add Application")
+            if submit:
+                try:
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO job_applications (user_id, company_name, job_role, application_date, resume_id, status) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (user_id, company_name, job_role, application_date, resume_id if resume_id != "None" else None, status)
+                    )
+                    conn.commit()
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT email FROM users WHERE username = %s", (st.session_state.username,))
+                    user_email = cursor.fetchone()[0]
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                    send_email(
+                        user_email,
+                        "Job Application Added",
+                        f"You added a job application for {job_role} at {company_name} on {application_date}. Status: {status}."
+                    )
+                    st.success("Application added successfully!")
+                except Exception as e:
+                    st.error(f"Failed to add application: {e}")
+        st.subheader("Your Applications")
+        try:
+            conn = DB_POOL.getconn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+            user_id = cursor.fetchone()[0]
+            cursor.execute("SELECT company_name, job_role, application_date, status, resume_id FROM job_applications WHERE user_id = %s ORDER BY application_date DESC", (user_id,))
+            apps = cursor.fetchall()
+            cursor.close()
+            DB_POOL.putconn(conn)
+            for app in apps:
+                resume_label = "None"
+                if app[4]:
+                    conn = DB_POOL.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT version_label FROM resumes WHERE id = %s", (app[4],))
+                    result = cursor.fetchone()
+                    if result:
+                        resume_label = result[0]
+                    cursor.close()
+                    DB_POOL.putconn(conn)
+                st.write(f"**{app[2]}** - {app[0]} ({app[1]}) - Status: {app[3]} - Resume: {resume_label}")
+        except Exception as e:
+            st.error(f"Failed to fetch applications: {e}")
 
     # Custom CSS
     custom_css = """
