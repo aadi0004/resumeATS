@@ -42,3 +42,4 @@ elevenlabs
 docx2txt
 fpdf
 psycopg2-binary
+bcrypt
