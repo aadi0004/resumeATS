@@ -4,24 +4,20 @@ import os
 import json
 import threading
 import csv
-import random
-import string
 from datetime import datetime, timedelta
 from typing import Optional, Union
 import pandas as pd
 import streamlit as st
-from PIL import Image
-import pdf2image
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-import streamlit.components.v1 as components
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from elevenlabs.client import ElevenLabs
 from dotenv import load_dotenv
+import bcrypt
 
 # Configure logging
 logging.basicConfig(
@@ -123,9 +119,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
-                email VARCHAR(255),
-                mobile_number VARCHAR(20),
-                theme VARCHAR(10) DEFAULT 'Light',
+                password BYTEA NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -207,11 +201,12 @@ def init_db():
     finally:
         DB_POOL.putconn(conn)
 
-def register_user(username: str, email: str, mobile_number: str) -> bool:
+def register_user(username: str, password: str) -> bool:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, email, mobile_number) VALUES (%s, %s, %s)", (username, email, mobile_number))
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
         conn.commit()
         cursor.close()
         logger.info(f"User registered: {username}")
@@ -227,20 +222,20 @@ def register_user(username: str, email: str, mobile_number: str) -> bool:
     finally:
         DB_POOL.putconn(conn)
 
-def login_user(username: str) -> bool:
+def login_user(username: str, password: str) -> bool:
     conn = DB_POOL.getconn()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
+        cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
         result = cursor.fetchone()
         cursor.close()
-        if result:
+        if result and bcrypt.checkpw(password.encode('utf-8'), result[0]):
             st.session_state.username = username
             logger.info(f"User logged in: {username}")
             return True
         else:
-            st.error("Username not found.")
-            logger.warning(f"Login failed for {username}: Not found")
+            st.error("Invalid username or password.")
+            logger.warning(f"Login failed for {username}: Invalid credentials")
             return False
     except Exception as e:
         st.error(f"Login failed: {e}")
@@ -254,11 +249,14 @@ def log_to_postgres(action: str, response: str):
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-        user_id = cursor.fetchone()
-        if user_id:
-            cursor.execute("INSERT INTO button_logs (action, response, user_id) VALUES (%s, %s, %s)", (action, response, user_id[0]))
+        result = cursor.fetchone()
+        if result:
+            user_id = result[0]
+            cursor.execute("INSERT INTO button_logs (action, response, user_id) VALUES (%s, %s, %s)", (action, response, user_id))
             conn.commit()
             logger.info(f"Logged action to Postgres: {action}")
+        else:
+            logger.warning(f"User not found for logging action: {action}")
         cursor.close()
     except Exception as e:
         st.error(f"PostgreSQL logging failed: {e}")
@@ -271,7 +269,11 @@ def save_resume_to_postgres(filename: str, resume_text: str, version_label: str,
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-        user_id = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            logger.error("User not found for saving resume")
+            return None
+        user_id = result[0]
         cursor.execute(
             "SELECT id, version_number FROM resumes WHERE filename = %s AND user_id = %s ORDER BY version_number DESC LIMIT 1",
             (filename, user_id)
@@ -342,7 +344,12 @@ def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-        user_id = cursor.fetchone()[0]
+        result = cursor.fetchone()
+        if not result:
+            cursor.close()
+            DB_POOL.putconn(conn)
+            return "Error: User not found."
+        user_id = result[0]
         if not check_api_quota(user_id):
             cursor.close()
             DB_POOL.putconn(conn)
@@ -355,7 +362,7 @@ def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
             logger.info(f"Retrieved cached Gemini response for action: {action}")
             return cached[0]
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content([prompt, f"Add randomness: {os.urandom(8).hex()}"])
+        response = model.generate_content([prompt])
         if hasattr(response, 'text') and response.text:
             token_count = len(prompt.split())
             log_api_usage(action, token_count)
@@ -385,6 +392,46 @@ init_db()
 # -------------------- Streamlit App --------------------
 st.set_page_config(page_title="ResumeSmartX - AI ATS", page_icon="📄", layout='wide')
 
+# Apply black theme
+st.markdown("""
+<style>
+    body, .stApp {
+        background-color: #000000;
+        color: #FFFFFF;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        padding: 10px;
+        background-color: #4CAF50;
+        color: #FFFFFF;
+    }
+    .stTextInput>div>input, .stTextArea textarea {
+        background-color: #333333;
+        color: #FFFFFF;
+        border: 1px solid #4CAF50;
+    }
+    .stSelectbox>div>div {
+        background-color: #333333;
+        color: #FFFFFF;
+    }
+    .stMetric, .stMarkdown, .stText {
+        color: #FFFFFF;
+    }
+    .bottom-right {
+        position: fixed;
+        bottom: 10px;
+        right: 10px;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: #FFFFFF;
+        padding: 10px 15px;
+        border-radius: 10px;
+        font-size: 14px;
+    }
+</style>
+<div class="bottom-right"><b>Built by AI Team</b></div>
+""", unsafe_allow_html=True)
+
 # Initialize session state
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -392,76 +439,6 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 if 'selected_tab' not in st.session_state:
     st.session_state.selected_tab = "Login"
-
-# Apply theme
-def apply_theme():
-    conn = DB_POOL.getconn()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT theme FROM users WHERE username = %s", (st.session_state.username,))
-        theme = cursor.fetchone()
-        cursor.close()
-        theme = theme[0] if theme else 'Light'
-    except Exception as e:
-        logger.error(f"Failed to fetch theme: {e}")
-        theme = 'Light'
-    finally:
-        DB_POOL.putconn(conn)
-    css = """
-    <style>
-        body, .stApp {
-            background-color: %s;
-            color: %s;
-        }
-        .stButton>button {
-            width: 100%%;
-            border-radius: 8px;
-            padding: 10px;
-            background-color: %s;
-            color: %s;
-        }
-        @media (max-width: 600px) {
-            .stColumn {
-                display: block;
-                width: 100%%;
-            }
-            .stTextInput, .stTextArea {
-                width: 100%% !important;
-            }
-        }
-        .bottom-right {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            background-color: %s;
-            color: %s;
-            padding: 10px 15px;
-            border-radius: 10px;
-            font-size: 14px;
-        }
-    </style>
-    <div class="bottom-right"><b>Built by AI Team</b></div>
-    """
-    try:
-        if theme == 'Dark':
-            st.markdown(css % ('#1E1E1E', '#FFFFFF', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
-        elif theme == 'Auto':
-            st.markdown("""
-            <style>
-                @media (prefers-color-scheme: dark) {
-                    body, .stApp { background-color: #1E1E1E; color: #FFFFFF; }
-                    .stButton>button { background-color: #4CAF50; color: #FFFFFF; }
-                    .bottom-right { background-color: rgba(0, 0, 0, 0.7); color: #FFFFFF; }
-                }
-            </style>
-            """, unsafe_allow_html=True)
-            st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
-        else:
-            st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
-        logger.info(f"Applied {theme} theme successfully")
-    except Exception as e:
-        st.error(f"Failed to apply theme: {e}")
-        logger.error(f"Failed to apply theme: {e}")
 
 # Sidebar Navigation
 try:
@@ -478,64 +455,46 @@ else:
         "🛠 Debug Code", "🤖 Voice Agent", "📜 History", "📊 Dashboard",
         "📋 Job Tracker", "✍️ Resume Builder", "👤 Profile"
     ])
-    theme = st.sidebar.selectbox("Theme", ["Light", "Dark", "Auto"], key="theme")
-    conn = DB_POOL.getconn()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET theme = %s WHERE username = %s", (theme, st.session_state.username))
-        conn.commit()
-        cursor.close()
-    except Exception as e:
-        logger.error(f"Failed to update theme: {e}")
-    finally:
-        DB_POOL.putconn(conn)
-    apply_theme()
 
 # Login Page
 if st.session_state.selected_tab == "Login" and not st.session_state.authenticated:
     st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Login to ResumeSmartX</h1>", unsafe_allow_html=True)
     with st.form("login_form"):
         username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         submit = st.form_submit_button("Login")
         if submit:
-            if username:
-                if login_user(username):
+            if username and password:
+                if login_user(username, password):
                     st.session_state.authenticated = True
                     st.session_state.selected_tab = "🏆 Resume Analysis"
                     st.rerun()
                 else:
-                    st.error("Login failed. Please check your username.")
+                    st.error("Login failed. Please check your credentials.")
             else:
-                st.error("Please enter a username.")
+                st.error("Please enter both username and password.")
 
 # Registration Page
 elif st.session_state.selected_tab == "Register":
     st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Register for ResumeSmartX</h1>", unsafe_allow_html=True)
-    try:
-        with st.form("register_form"):
-            username = st.text_input("Username")
-            email = st.text_input("Email")
-            mobile_number = st.text_input("Mobile Number")
-            submit = st.form_submit_button("Register")
-            if submit:
-                if len(username) < 3:
-                    st.error("Username must be at least 3 characters.")
-                elif not email or '@' not in email:
-                    st.error("Please enter a valid email.")
-                elif not mobile_number or not mobile_number.isdigit() or len(mobile_number) < 10:
-                    st.error("Please enter a valid mobile number (at least 10 digits).")
+    with st.form("register_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Register")
+        if submit:
+            if len(username) < 3:
+                st.error("Username must be at least 3 characters.")
+            elif len(password) < 6:
+                st.error("Password must be at least 6 characters.")
+            else:
+                if register_user(username, password):
+                    st.session_state.authenticated = True
+                    st.session_state.username = username
+                    st.session_state.selected_tab = "🏆 Resume Analysis"
+                    st.success("Registration successful! Logged in.")
+                    st.rerun()
                 else:
-                    if register_user(username, email, mobile_number):
-                        st.session_state.authenticated = True
-                        st.session_state.username = username
-                        st.session_state.selected_tab = "🏆 Resume Analysis"
-                        st.success("Registration successful! Logged in.")
-                        st.rerun()
-                    else:
-                        st.error("Registration failed. Username may already exist.")
-    except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        st.error(f"Error: {str(e)}")
+                    st.error("Registration failed. Username may already exist.")
 
 # Main App
 elif st.session_state.authenticated:
@@ -549,29 +508,25 @@ elif st.session_state.authenticated:
     if st.session_state.selected_tab == "🏆 Resume Analysis":
         st.markdown("<h1 style='text-align: center; color: #4CAF50;'>MY PERSONAL ATS</h1>", unsafe_allow_html=True)
         st.markdown("<hr style='border: 1px solid #4CAF50;'>", unsafe_allow_html=True)
-        try:
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                input_text = st.text_area("📋 Job Description:", key="input", height=150)
-            with col2:
-                version_label = st.text_input("Resume Version Label", "Default Version")
-                uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
-                if uploaded_file:
-                    st.success("✅ Successfully uploaded.")
-                    resume_text = ""
-                    try:
-                        reader = PdfReader(uploaded_file)
-                        for page in reader.pages:
-                            if page and page.extract_text():
-                                resume_text += page.extract_text()
-                        st.session_state['resume_text'] = resume_text
-                        save_resume_to_postgres(uploaded_file.name, resume_text, version_label)
-                    except Exception as e:
-                        st.error(f"Error reading PDF: {e}")
-                        logger.error(f"Failed to read PDF: {e}")
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error: {e}")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            input_text = st.text_area("📋 Job Description:", key="input", height=150)
+        with col2:
+            version_label = st.text_input("Resume Version Label", "Default Version")
+            uploaded_file = st.file_uploader("📄 Upload your resume (PDF)...", type=['pdf'])
+            if uploaded_file:
+                st.success("✅ Successfully uploaded.")
+                resume_text = ""
+                try:
+                    reader = PdfReader(uploaded_file)
+                    for page in reader.pages:
+                        if page and page.extract_text():
+                            resume_text += page.extract_text()
+                    st.session_state['resume_text'] = resume_text
+                    save_resume_to_postgres(uploaded_file.name, resume_text, version_label)
+                except Exception as e:
+                    st.error(f"Error reading PDF: {e}")
+                    logger.error(f"Failed to read PDF: {e}")
 
         st.markdown("---")
         st.markdown("<h3 style='text-align: center; margin-bottom: 2rem;'>🛠 Quick Actions</h3>", unsafe_allow_html=True)
@@ -738,168 +693,151 @@ elif st.session_state.authenticated:
     elif st.session_state.selected_tab == "🔲 Top 3 MNCs":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>🚀 Top 3 MNCs for Data Science</h2>", unsafe_allow_html=True)
         st.markdown("<hr style='border: none; border-bottom: 2px solid #4CAF50; margin-bottom: 2rem;'>", unsafe_allow_html=True)
-        try:
-            if "selected_mnc" not in st.session_state:
-                st.session_state["selected_mnc"] = None
-            mnc_data = [
-                {"name": "TCS", "color": "#FFA500", "icon": "🎯"},
-                {"name": "Infosys", "color": "#FF0000", "icon": "🚀"},
-                {"name": "Wipro", "color": "#800080", "icon": "🔍"}
-            ]
-            col1, col2, col3 = st.columns(3)
-            for col, mnc in zip([col1, col2, col3], mnc_data):
-                with col:
-                    if st.button(f"{mnc['icon']} {mnc['name']}", key=f"{mnc['name']}_mnc"):
-                        st.session_state["selected_mnc"] = mnc["name"]
-            if st.session_state.get("selected_mnc"):
-                selected_mnc = st.session_state["selected_mnc"]
-                st.markdown(f"<h3 style='color: #FFA500; text-align: center;'>{selected_mnc} Data Science Prep</h3>", unsafe_allow_html=True)
-                st.markdown("---")
-                with st.spinner("Analyzing..."):
+        if "selected_mnc" not in st.session_state:
+            st.session_state["selected_mnc"] = None
+        mnc_data = [
+            {"name": "TCS", "color": "#FFA500", "icon": "🎯"},
+            {"name": "Infosys", "color": "#FF0000", "icon": "🚀"},
+            {"name": "Wipro", "color": "#800080", "icon": "🔍"}
+        ]
+        col1, col2, col3 = st.columns(3)
+        for col, mnc in zip([col1, col2, col3], mnc_data):
+            with col:
+                if st.button(f"{mnc['icon']} {mnc['name']}", key=f"{mnc['name']}_mnc"):
+                    st.session_state["selected_mnc"] = mnc["name"]
+        if st.session_state.get("selected_mnc"):
+            selected_mnc = st.session_state["selected_mnc"]
+            st.markdown(f"<h3 style='color: #FFA500; text-align: center;'>{selected_mnc} Data Science Prep</h3>", unsafe_allow_html=True)
+            st.markdown("---")
+            with st.spinner("Analyzing..."):
+                if not st.session_state.get('resume_text'):
+                    st.warning("Please upload a resume in the Resume Analysis tab.")
+                else:
+                    response = get_gemini_response(
+                        f"Based on the candidate's resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?",
+                        action="MNC_Skills"
+                    )
+                    log_to_postgres("MNC_Skills", response)
+                    st.write(response)
+            if st.button("📂 Project Types & Skills"):
+                with st.spinner("Loading..."):
                     if not st.session_state.get('resume_text'):
-                        st.warning("Please upload a resume first.")
+                        st.warning("Please upload a resume in the Resume Analysis tab.")
                     else:
                         response = get_gemini_response(
-                            f"Based on the candidate's resume, what additional skills and knowledge are needed to secure a Data Science role at {selected_mnc}?",
-                            action="MNC_Skills"
+                            f"What types of data science projects does {selected_mnc} typically work on, and what skills are required?",
+                            action="MNC_Projects"
                         )
-                        log_to_postgres("MNC_Skills", response)
+                        log_to_postgres("MNC_Projects", response)
                         st.write(response)
-                if st.button("📂 Project Types & Skills"):
-                    with st.spinner("Loading..."):
-                        if not st.session_state.get('resume_text'):
-                            st.warning("Please upload a resume first.")
-                        else:
-                            response = get_gemini_response(
-                                f"What types of data science projects does {selected_mnc} typically work on, and what skills are required?",
-                                action="MNC_Projects"
-                            )
-                            log_to_postgres("MNC_Projects", response)
-                            st.write(response)
-                if st.button("🛠 Required Skills"):
-                    with st.spinner("Loading..."):
-                        if not st.session_state.get('resume_text'):
-                            st.warning("Please upload a resume first.")
-                        else:
-                            response = get_gemini_response(
-                                f"What technical and soft skills are required for a Data Science role at {selected_mnc}?",
-                                action="MNC_Required_Skills"
-                            )
-                            log_to_postgres("MNC_Required_Skills", response)
-                            st.write(response)
-                if st.button("💡 Career Recommendations"):
-                    with st.spinner("Loading..."):
-                        if not st.session_state.get('resume_text'):
-                            st.warning("Please upload a resume first.")
-                        else:
-                            response = get_gemini_response(
-                                f"Based on the candidate's resume, what areas should they focus on to improve their chances for a Data Science role at {selected_mnc}?",
-                                action="MNC_Career_Recs"
-                            )
-                            log_to_postgres("MNC_Career_Recs", response)
-                            st.write(response)
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in MNC section: {e}")
+            if st.button("🛠 Required Skills"):
+                with st.spinner("Loading..."):
+                    if not st.session_state.get('resume_text'):
+                        st.warning("Please upload a resume in the Resume Analysis tab.")
+                    else:
+                        response = get_gemini_response(
+                            f"What technical and soft skills are required for a Data Science role at {selected_mnc}?",
+                            action="MNC_Required_Skills"
+                        )
+                        log_to_postgres("MNC_Required_Skills", response)
+                        st.write(response)
+            if st.button("💡 Career Recommendations"):
+                with st.spinner("Loading..."):
+                    if not st.session_state.get('resume_text'):
+                        st.warning("Please upload a resume in the Resume Analysis tab.")
+                    else:
+                        response = get_gemini_response(
+                            f"Based on the candidate's resume, what areas should they focus on to improve their chances for a Data Science role at {selected_mnc}?",
+                            action="MNC_Career_Recs"
+                        )
+                        log_to_postgres("MNC_Career_Recs", response)
+                        st.write(response)
 
     elif st.session_state.selected_tab == "📊 Data Science":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>📊 DSA & Data Science</h2>", unsafe_allow_html=True)
-        try:
-            level = st.selectbox("Select Difficulty Level:", ["Beginner", "Intermediate", "Advanced"])
-            if st.button(f"Generate {level} DSA Questions"):
-                with st.spinner("Generating..."):
-                    response = get_gemini_response(
-                        f"Generate 10 {level} DSA questions and answers for Data Science.",
-                        action="DSA_Questions"
-                    )
-                    log_to_postgres("DSA_Questions", response)
-                    st.write(response)
-            topic = st.selectbox("Select DSA Topic:", [
-                "Arrays", "Linked Lists", "Trees", "Graphs",
-                "Dynamic Programming", "Sorting", "Searching", "Recursion"
-            ])
-            if st.button(f"Learn {topic} with Case Studies"):
-                with st.spinner("Generating..."):
-                    response = get_gemini_response(
-                        f"Explain {topic} in simple terms for Data Science, including Python code examples and a real-world case study.",
-                        action="DSA_Learn"
-                    )
-                    log_to_postgres("DSA_Learn", response)
-                    st.write(response)
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in Data Science section: {e}")
+        level = st.selectbox("Select Difficulty Level:", ["Beginner", "Intermediate", "Advanced"])
+        if st.button(f"Generate {level} DSA Questions"):
+            with st.spinner("Generating..."):
+                response = get_gemini_response(
+                    f"Generate 10 {level} DSA questions and answers for Data Science.",
+                    action="DSA_Questions"
+                )
+                log_to_postgres("DSA_Questions", response)
+                st.write(response)
+        topic = st.selectbox("Select DSA Topic:", [
+            "Arrays", "Linked Lists", "Trees", "Graphs",
+            "Dynamic Programming", "Sorting", "Searching", "Recursion"
+        ])
+        if st.button(f"Learn {topic} with Case Studies"):
+            with st.spinner("Generating..."):
+                response = get_gemini_response(
+                    f"Explain {topic} in simple terms for Data Science, including Python code examples and a real-world case study.",
+                    action="DSA_Learn"
+                )
+                log_to_postgres("DSA_Learn", response)
+                st.write(response)
 
     elif st.session_state.selected_tab == "📚 Question Bank":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>📚 Question Bank</h2>", unsafe_allow_html=True)
-        try:
-            question_category = st.selectbox("Select Category:", [
-                "Python", "Machine Learning", "Deep Learning", "SQL",
-                "Data Warehousing", "Data Pipelines", "Docker"
-            ])
-            if st.button(f"Generate 30 {question_category} Questions"):
-                with st.spinner("Generating..."):
-                    response = get_gemini_response(
-                        f"Generate 30 {question_category} interview questions with detailed answers.",
-                        action="Question_Bank"
-                    )
-                    log_to_postgres("Question_Bank", response)
-                    st.write(response)
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in Question Bank section: {e}")
+        question_category = st.selectbox("Select Category:", [
+            "Python", "Machine Learning", "Deep Learning", "SQL",
+            "Data Warehousing", "Data Pipelines", "Docker"
+        ])
+        if st.button(f"Generate 30 {question_category} Questions"):
+            with st.spinner("Generating..."):
+                response = get_gemini_response(
+                    f"Generate 30 {question_category} interview questions with detailed answers.",
+                    action="Question_Bank"
+                )
+                log_to_postgres("Question_Bank", response)
+                st.write(response)
 
     elif st.session_state.selected_tab == "🛠 Debug Code":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>🛠 Debug Code</h2>", unsafe_allow_html=True)
-        try:
-            code = st.text_area("Paste your Python code:", height=300)
-            if st.button("Debug Code"):
-                if not code.strip():
-                    st.warning("Please enter some code.")
-                else:
-                    with st.spinner("Debugging..."):
-                        response = get_gemini_response(
-                            f"Debug the following Python code and provide a fixed version with explanations:\n\n```python\n{code}\n```",
-                            action="Debug_Code"
-                        )
-                        log_to_postgres("Debug_Code", response)
-                        st.write(response)
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in Debug Code section: {e}")
+        code = st.text_area("Paste your Python code:", height=300)
+        if st.button("Debug Code"):
+            if not code.strip():
+                st.warning("Please enter some code.")
+            else:
+                with st.spinner("Debugging..."):
+                    response = get_gemini_response(
+                        f"Debug the following Python code and provide a fixed version with explanations:\n\n```python\n{code}\n```",
+                        action="Debug_Code"
+                    )
+                    log_to_postgres("Debug_Code", response)
+                    st.write(response)
 
     elif st.session_state.selected_tab == "🤖 Voice Agent":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>🤖 Voice Agent</h2>", unsafe_allow_html=True)
-        try:
-            st.markdown(
-                f"""
-                <div style='text-align: center;'>
-                    <a href='https://elevenlabs.io/app/talk-to?agent_id={AGENT_ID}' target='_blank'>
-                        <button style='padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;'>
-                            Launch Voice Interview
-                        </button>
-                    </a>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in Voice Agent section: {e}")
+        st.markdown(
+            f"""
+            <div style='text-align: center;'>
+                <a href='https://elevenlabs.io/app/talk-to?agent_id={AGENT_ID}' target='_blank'>
+                    <button style='padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;'>
+                        Launch Voice Interview
+                    </button>
+                </a>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     elif st.session_state.selected_tab == "📜 History":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>📜 History</h2>", unsafe_allow_html=True)
+        conn = DB_POOL.getconn()
         try:
-            conn = DB_POOL.getconn()
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-            user_id = cursor.fetchone()[0]
+            result = cursor.fetchone()
+            if not result:
+                st.error("User not found.")
+                logger.error("User not found in history")
+            user_id = result[0]
             cursor.execute("SELECT action, response, created_at FROM button_logs WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
             logs = cursor.fetchall()
             cursor.execute("SELECT filename, version_label, version_number, uploaded_at FROM resumes WHERE user_id = %s ORDER BY uploaded_at DESC", (user_id,))
             resumes = cursor.fetchall()
             cursor.close()
-            DB_POOL.putconn(conn)
             st.subheader("Activity Logs")
             for log in logs:
                 st.write(f"**{log[2].strftime('%Y-%m-%d %H:%M:%S')}**: {log[0]}")
@@ -924,14 +862,20 @@ elif st.session_state.authenticated:
         except Exception as e:
             st.error(f"Failed to load history: {e}")
             logger.error(f"Failed to load history: {e}")
+        finally:
+            DB_POOL.putconn(conn)
 
     elif st.session_state.selected_tab == "📊 Dashboard":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>📊 Career Dashboard</h2>", unsafe_allow_html=True)
+        conn = DB_POOL.getconn()
         try:
-            conn = DB_POOL.getconn()
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-            user_id = cursor.fetchone()[0]
+            result = cursor.fetchone()
+            if not result:
+                st.error("User not found.")
+                logger.error("User not found in dashboard")
+            user_id = result[0]
             cursor.execute("SELECT COUNT(DISTINCT filename) FROM resumes WHERE user_id = %s", (user_id,))
             resume_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM button_logs WHERE user_id = %s AND action LIKE '%Gemini%'", (user_id,))
@@ -943,7 +887,6 @@ elif st.session_state.authenticated:
             cursor.execute("SELECT job_title, company, description, apply_link, created_at FROM job_alerts WHERE user_id = %s ORDER BY created_at DESC LIMIT 5", (user_id,))
             job_alerts = cursor.fetchall()
             cursor.close()
-            DB_POOL.putconn(conn)
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("Resumes", resume_count)
@@ -1021,29 +964,35 @@ elif st.session_state.authenticated:
         except Exception as e:
             st.error(f"Failed to load dashboard: {e}")
             logger.error(f"Failed to load dashboard: {e}")
+        finally:
+            DB_POOL.putconn(conn)
 
     elif st.session_state.selected_tab == "📋 Job Tracker":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>📋 Job Tracker</h2>", unsafe_allow_html=True)
-        try:
-            with st.form("job_tracker"):
-                company_name = st.text_input("Company")
-                job_role = st.text_input("Role")
-                application_date = st.date_input("Application Date")
-                status = st.selectbox("Status", ["Applied", "Interviewing", "Offer", "Rejected"])
-                resume_options = [(None, "None")]
-                conn = DB_POOL.getconn()
+        with st.form("job_tracker"):
+            company_name = st.text_input("Company")
+            job_role = st.text_input("Role")
+            application_date = st.date_input("Application Date")
+            status = st.selectbox("Status", ["Applied", "Interviewing", "Offer", "Rejected"])
+            resume_options = [(None, "None")]
+            conn = DB_POOL.getconn()
+            try:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
-                user_id = cursor.fetchone()[0]
-                cursor.execute("SELECT id, version_label FROM resumes WHERE user_id = %s", (user_id,))
-                resumes = cursor.fetchall()
+                result = cursor.fetchone()
+                if result:
+                    user_id = result[0]
+                    cursor.execute("SELECT id, version_label FROM resumes WHERE user_id = %s", (user_id,))
+                    resumes = cursor.fetchall()
+                    resume_options.extend([(r[0], r[1]) for r in resumes])
                 cursor.close()
+            finally:
                 DB_POOL.putconn(conn)
-                resume_options.extend([(r[0], r[1]) for r in resumes])
-                resume_id = st.selectbox("Select Resume", options=[r[0] for r in resume_options], format_func=lambda x: next((r[1] for r in resume_options if r[0] == x), "None"))
-                submit = st.form_submit_button("Submit")
-                if submit:
-                    conn = DB_POOL.getconn()
+            resume_id = st.selectbox("Select Resume", options=[r[0] for r in resume_options], format_func=lambda x: next((r[1] for r in resume_options if r[0] == x), "None"))
+            submit = st.form_submit_button("Submit")
+            if submit:
+                conn = DB_POOL.getconn()
+                try:
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO job_applications (user_id, company_name, job_role, application_date, status, resume_id)
@@ -1058,49 +1007,54 @@ elif st.session_state.authenticated:
                     ))
                     conn.commit()
                     cursor.close()
-                    DB_POOL.putconn(conn)
                     st.success("Application added")
                     logger.info(f"Added job application for {st.session_state.username}")
-            st.subheader("Applications")
-            conn = DB_POOL.getconn()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT company_name, job_role, application_date, status, resume_id
-                FROM job_applications
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-            """, (user_id,))
-            apps = cursor.fetchall()
-            cursor.close()
-            DB_POOL.putconn(conn)
-            for app in apps:
-                resume_label = "None"
-                if app[4]:
-                    conn = DB_POOL.getconn()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT version_label FROM resumes WHERE id = %s", (app[4],))
-                    result = cursor.fetchone()
-                    resume_label = result[0] if result else "None"
-                    cursor.close()
+                except Exception as e:
+                    st.error(f"Failed to add application: {e}")
+                    logger.error(f"Failed to add application: {e}")
+                finally:
                     DB_POOL.putconn(conn)
-                st.markdown(f"**{app[2]}**: {app[0]} ({app[1]}) - Status: {app[3]} - Resume: {resume_label}")
+        st.subheader("Applications")
+        conn = DB_POOL.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.username,))
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                cursor.execute("""
+                    SELECT company_name, job_role, application_date, status, resume_id
+                    FROM job_applications
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                """, (user_id,))
+                apps = cursor.fetchall()
+                for app in apps:
+                    resume_label = "None"
+                    if app[4]:
+                        cursor.execute("SELECT version_label FROM resumes WHERE id = %s", (app[4],))
+                        result = cursor.fetchone()
+                        resume_label = result[0] if result else "None"
+                    st.markdown(f"**{app[2]}**: {app[0]} ({app[1]}) - Status: {app[3]} - Resume: {resume_label}")
+            cursor.close()
         except Exception as e:
             st.error(f"Failed to load job tracker: {e}")
             logger.error(f"Failed to load job tracker: {e}")
+        finally:
+            DB_POOL.putconn(conn)
 
     elif st.session_state.selected_tab == "✍️ Resume Builder":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>✍️ Resume Builder</h2>", unsafe_allow_html=True)
-        try:
-            template = st.selectbox("Template", ["Chronological", "Functional"])
-            with st.form("resume_form"):
-                personal_info = st.text_area("Personal Info", height=100)
-                education = st.text_area("Education", height=100)
-                experience = st.text_area("Experience", height=100)
-                skills = st.text_area("Skills", height=100)
-                version_label = st.text_input("Version Label", "New Resume")
-                submit = st.form_submit_button("Generate Resume")
-                if submit:
-                    resume_text = f"""
+        template = st.selectbox("Template", ["Chronological", "Functional"])
+        with st.form("resume_form"):
+            personal_info = st.text_area("Personal Info", height=100)
+            education = st.text_area("Education", height=100)
+            experience = st.text_area("Experience", height=100)
+            skills = st.text_area("Skills", height=100)
+            version_label = st.text_input("Version Label", "New Resume")
+            submit = st.form_submit_button("Generate Resume")
+            if submit:
+                resume_text = f"""
 Personal Info:
 {personal_info}
 
@@ -1112,87 +1066,80 @@ Experience:
 
 Skills:
 {skills}
-                    """
-                    pdf_buffer = io.BytesIO()
-                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
-                    styles = getSampleStyleSheet()
-                    story = []
-                    if template == "Chronological":
-                        story.extend([
-                            Paragraph(personal_info.replace('\n', '<br />'), styles['Title']),
-                            Spacer(1, 12),
-                            Paragraph("Education", styles['Heading2']),
-                            Paragraph(education.replace('\n', '<br />'), styles['Normal']),
-                            Spacer(1, 12),
-                            Paragraph("Experience", styles['Heading2']),
-                            Paragraph(experience.replace('\n', '<br />'), styles['Normal']),
-                            Spacer(1, 12),
-                            Paragraph("Skills", styles['Heading2']),
-                            Paragraph(skills.replace('\n', '<br />'), styles['Normal'])
-                        ])
-                    else:
-                        story.extend([
-                            Paragraph(personal_info.replace('\n', '<br />'), styles['Title']),
-                            Spacer(1, 12),
-                            Paragraph("Skills", styles['Heading2']),
-                            Paragraph(skills.replace('\n', '<br />'), styles['Normal']),
-                            Spacer(1, 12),
-                            Paragraph("Experience", styles['Heading2']),
-                            Paragraph(experience.replace('\n', '<br />'), styles['Normal']),
-                            Spacer(1, 12),
-                            Paragraph("Education", styles['Heading2']),
-                            Paragraph(education.replace('\n', '<br />'), styles['Normal'])
-                        ])
-                    doc.build(story)
-                    st.session_state['resume_text'] = resume_text
-                    resume_id = save_resume_to_postgres(f"resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", resume_text, version_label)
-                    if resume_id:
-                        st.download_button(
-                            "Download Resume",
-                            pdf_buffer.getvalue(),
-                            "resume.pdf",
-                            "application/pdf"
-                        )
-                        st.success("Resume generated!")
-                    else:
-                        st.error("Failed to save resume")
-        except Exception as e:
-            st.error(f"Error: {e}")
-            logger.error(f"Error in Resume Builder: {e}")
+                """
+                pdf_buffer = io.BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+                styles = getSampleStyleSheet()
+                story = []
+                if template == "Chronological":
+                    story.extend([
+                        Paragraph(personal_info.replace('\n', '<br />'), styles['Title']),
+                        Spacer(1, 12),
+                        Paragraph("Education", styles['Heading2']),
+                        Paragraph(education.replace('\n', '<br />'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Experience", styles['Heading2']),
+                        Paragraph(experience.replace('\n', '<br />'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Skills", styles['Heading2']),
+                        Paragraph(skills.replace('\n', '<br />'), styles['Normal'])
+                    ])
+                else:
+                    story.extend([
+                        Paragraph(personal_info.replace('\n', '<br />'), styles['Title']),
+                        Spacer(1, 12),
+                        Paragraph("Skills", styles['Heading2']),
+                        Paragraph(skills.replace('\n', '<br />'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Experience", styles['Heading2']),
+                        Paragraph(experience.replace('\n', '<br />'), styles['Normal']),
+                        Spacer(1, 12),
+                        Paragraph("Education", styles['Heading2']),
+                        Paragraph(education.replace('\n', '<br />'), styles['Normal'])
+                    ])
+                doc.build(story)
+                st.session_state['resume_text'] = resume_text
+                resume_id = save_resume_to_postgres(f"resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", resume_text, version_label)
+                if resume_id:
+                    st.download_button(
+                        "Download Resume",
+                        pdf_buffer.getvalue(),
+                        "resume.pdf",
+                        "application/pdf"
+                    )
+                    st.success("Resume generated!")
+                else:
+                    st.error("Failed to save resume")
 
     elif st.session_state.selected_tab == "👤 Profile":
         st.markdown("<h2 style='text-align: center; color: #FFA500;'>👤 Profile</h2>", unsafe_allow_html=True)
+        conn = DB_POOL.getconn()
         try:
-            conn = DB_POOL.getconn()
             cursor = conn.cursor()
-            cursor.execute("SELECT email, mobile_number, theme FROM users WHERE username = %s", (st.session_state.username,))
+            cursor.execute("SELECT username FROM users WHERE username = %s", (st.session_state.username,))
             user_data = cursor.fetchone()
             cursor.close()
-            DB_POOL.putconn(conn)
             with st.form("profile_form"):
-                email = st.text_input("Email", value=user_data[0] if user_data else "")
-                mobile_number = st.text_input("Mobile Number", value=user_data[1] if user_data else "")
-                submit = st.form_submit_button("Update Profile")
-                if submit:
-                    conn = DB_POOL.getconn()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("UPDATE users SET email = %s, mobile_number = %s WHERE username = %s", (email, mobile_number, st.session_state.username))
+                username = st.text_input("Username", value=user_data[0] if user_data else "", disabled=True)
+                new_password = st.text_input("New Password (leave blank to keep current)", type="password")
+                submit = st.form_submit_button("Update Password")
+                if submit and new_password:
+                    if len(new_password) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    else:
+                        hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+                        conn = DB_POOL.getconn()
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE users SET password = %s WHERE username = %s", (hashed_password, st.session_state.username))
                         conn.commit()
-                        st.success("Profile updated successfully!")
-                        logger.info(f"Updated profile for {st.session_state.username}")
-                    except psycopg2.IntegrityError:
-                        st.error("Email already in use.")
-                        logger.error(f"Failed to update profile: Email already in use")
-                    except Exception as e:
-                        st.error(f"Failed to update profile: {e}")
-                        logger.error(f"Failed to update profile: {e}")
-                    finally:
                         cursor.close()
-                        DB_POOL.putconn(conn)
+                        st.success("Password updated successfully!")
+                        logger.info(f"Updated password for {st.session_state.username}")
         except Exception as e:
             st.error(f"Failed to load profile: {e}")
             logger.error(f"Failed to load profile: {e}")
+        finally:
+            DB_POOL.putconn(conn)
 
 else:
     st.error("Please log in to access the app.")
