@@ -336,7 +336,7 @@ def log_api_call(user_id: int, action: str):
 # -------------------- Gemini API Wrapper --------------------
 def get_gemini_response(prompt: str, action: str = "Gemini_API_Call") -> str:
     if not prompt.strip():
-        logger.warning("Empty prompt provided to for Gemini API")
+        logger.warning("Empty prompt provided to Gemini API")
         return "Error: Prompt is empty. Please provide a valid prompt."
     conn = DB_POOL.getconn()
     try:
@@ -402,7 +402,8 @@ def apply_theme():
         theme = cursor.fetchone()
         cursor.close()
         theme = theme[0] if theme else 'Light'
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to fetch theme: {e}")
         theme = 'Light'
     finally:
         DB_POOL.putconn(conn)
@@ -413,7 +414,7 @@ def apply_theme():
             color: %s;
         }
         .stButton>button {
-            width: 100%;
+            width: 100%%;
             border-radius: 8px;
             padding: 10px;
             background-color: %s;
@@ -422,10 +423,10 @@ def apply_theme():
         @media (max-width: 600px) {
             .stColumn {
                 display: block;
-                width: 100%;
+                width: 100%%;
             }
             .stTextInput, .stTextArea {
-                width: 100% !important;
+                width: 100%% !important;
             }
         }
         .bottom-right {
@@ -441,21 +442,26 @@ def apply_theme():
     </style>
     <div class="bottom-right"><b>Built by AI Team</b></div>
     """
-    if theme == 'Dark':
-        st.markdown(css % ('#1E1E1E', '#FFFFFF', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
-    elif theme == 'Auto':
-        st.markdown("""
-        <style>
-            @media (prefers-color-scheme: dark) {
-                body, .stApp { background-color: #1E1E1E; color: #FFFFFF; }
-                .stButton>button { background-color: #4CAF50; color: #FFFFFF; }
-                .bottom-right { background-color: rgba(0, 0, 0, 0.7); color: #FFFFFF; }
-            }
-        </style>
-        """, unsafe_allow_html=True)
-        st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
-    else:
-        st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
+    try:
+        if theme == 'Dark':
+            st.markdown(css % ('#1E1E1E', '#FFFFFF', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
+        elif theme == 'Auto':
+            st.markdown("""
+            <style>
+                @media (prefers-color-scheme: dark) {
+                    body, .stApp { background-color: #1E1E1E; color: #FFFFFF; }
+                    .stButton>button { background-color: #4CAF50; color: #FFFFFF; }
+                    .bottom-right { background-color: rgba(0, 0, 0, 0.7); color: #FFFFFF; }
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
+        else:
+            st.markdown(css % ('#FFFFFF', '#000000', '#4CAF50', '#FFFFFF', 'rgba(0, 0, 0, 0.7)', '#FFFFFF'), unsafe_allow_html=True)
+        logger.info(f"Applied {theme} theme successfully")
+    except Exception as e:
+        st.error(f"Failed to apply theme: {e}")
+        logger.error(f"Failed to apply theme: {e}")
 
 # Sidebar Navigation
 try:
@@ -621,32 +627,34 @@ elif st.session_state.authenticated:
                     st.download_button("💾 Download Percentage Match", response, "percentage_match.txt")
 
         learning_path_duration = st.selectbox("📆 Select Personalized Learning Path Duration:", ["3 Months", "6 Months", "9 Months", "12 Months"])
-        if st.form_submit_button("🎓 Generate Learning Path"):
-            with st.form("learning_path_form"):
+        with st.form("learning_path_form"):
+            submit = st.form_submit_button("🎓 Generate Learning Path")
+            if submit:
                 if not st.session_state.get('resume_text') or not input_text:
                     st.warning("Please upload a resume and provide a job description.")
                 else:
-                    response = get_gemini_response(
-                        f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\n{input_text}\n\nResume:\n{st.session_state['resume_text']}",
-                        action="Learning_Path"
-                    )
-                    log_to_postgres("Learning_Path", response)
-                    st.write(response)
-                    pdf_buffer = io.BytesIO()
-                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
-                    styles = getSampleStyleSheet()
-                    styles.add(ParagraphStyle(name='Custom', spaceAfter=12))
-                    story = [Paragraph(f"Personalized Learning Path ({learning_path_duration} Months)", styles['Title'])]
-                    for line in response.split('\n'):
-                        story.append(Paragraph(line, styles['Custom']))
-                        story.append(Spacer(1, 12))
-                    doc.build(story)
-                    st.download_button(
-                        "💾 Download Learning Path PDF",
-                        pdf_buffer.getvalue(),
-                        f"learning_path_{learning_path_duration.lower().replace(' ', '_')}.pdf",
-                        "application/pdf"
-                    )
+                    with st.spinner("Generating..."):
+                        response = get_gemini_response(
+                            f"Create a detailed and structured personalized learning path for a duration of {learning_path_duration} based on the resume and job description:\n\n{input_text}\n\nResume:\n{st.session_state['resume_text']}",
+                            action="Learning_Path"
+                        )
+                        log_to_postgres("Learning_Path", response)
+                        st.write(response)
+                        pdf_buffer = io.BytesIO()
+                        doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+                        styles = getSampleStyleSheet()
+                        styles.add(ParagraphStyle(name='Custom', spaceAfter=12))
+                        story = [Paragraph(f"Personalized Learning Path ({learning_path_duration} Months)", styles['Title'])]
+                        for line in response.split('\n'):
+                            story.append(Paragraph(line, styles['Custom']))
+                            story.append(Spacer(1, 12))
+                        doc.build(story)
+                        st.download_button(
+                            "💾 Download Learning Path PDF",
+                            pdf_buffer.getvalue(),
+                            f"learning_path_{learning_path_duration.lower().replace(' ', '_')}.pdf",
+                            "application/pdf"
+                        )
 
         if st.button("📝 Generate Updated Resume"):
             with st.spinner("Generating..."):
