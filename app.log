@@ -2,3 +2,7 @@
 2025-05-27 09:12:09,871 INFO: ElevenLabs client initialized
 2025-05-27 09:12:10,114 ERROR: Failed to initialize database pool: could not translate host name "database-1.cwdmo62sqr3o.us-east-1.rds.amazonaws.com" to address: Name or service not known
 
+2025-07-02 21:38:50,793 INFO: Google Gemini API configured successfully
+2025-07-02 21:38:52,560 INFO: ElevenLabs client initialized
+2025-07-02 21:38:52,863 ERROR: Failed to initialize database pool: could not translate host name "database-1.cwdmo62sqr3o.us-east-1.rds.amazonaws.com" to address: Name or service not known
+
